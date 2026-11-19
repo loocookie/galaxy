@@ -84,6 +84,8 @@
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+  /* mobile browsers flash the whole tappable SVG; the board's own feedback is enough */
+  -webkit-tap-highlight-color: transparent;
   transition: opacity 250ms ease;
 }
 .board.is-busy { opacity: 0.35; }
@@ -202,9 +204,12 @@ kbd {
   border-radius: 4px;
 }
 
+/* Phones: every row spans the board's width so the column reads as one block. */
 @media (max-width: 480px) {
-  .toolbar { flex-direction: column; align-items: stretch; }
-  .segmented { align-self: flex-start; }
-  .actions { justify-content: space-between; }
+  .toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .toolbar .segmented { display: flex; }
+  .toolbar .segmented button { flex: 1; justify-content: center; padding: 10px 14px; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .text-button { padding: 10px 8px; }
   .hint { display: none; }
 }
