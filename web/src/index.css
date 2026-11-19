@@ -1,0 +1,62 @@
+/* Galaxy: a cyanotype star chart.
+   Dark  = Prussian-blue print with chalk lines.
+   Light = the same chart inverted: Prussian ink on cool paper. */
+
+:root,
+:root[data-theme='light'] {
+  --ground: #f2f5f8;
+  --board: #ffffff;
+  --graticule: #c5d2e0;
+  --ink: #1b3358;
+  --ink-soft: rgba(27, 51, 88, 0.62);
+  --ink-faint: rgba(27, 51, 88, 0.14);
+  --accent: #a87a1f;
+  --error: #c4342d;
+}
+
+:root[data-theme='dark'] {
+  --ground: #14294a;
+  --board: #0e1f3a;
+  --graticule: #35527a;
+  --ink: #e9f0f7;
+  --ink-soft: rgba(233, 240, 247, 0.66);
+  --ink-faint: rgba(233, 240, 247, 0.14);
+  --accent: #e4bc62;
+  --error: #ff6b5e;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  background: var(--ground);
+  color: var(--ink);
+  font: 400 100%/1.5 'Jost', system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 400ms ease, color 400ms ease;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 1ms !important;
+  }
+}

@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# copied from ../galaxy.py by scripts/sync-py.mjs on dev/build
+public/py/

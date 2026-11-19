@@ -1,0 +1,23 @@
+{
+  "name": "galaxy",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "sync-py": "node scripts/sync-py.mjs",
+    "predev": "npm run sync-py",
+    "prebuild": "npm run sync-py",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node test/board.test.mjs"
+  },
+  "dependencies": {
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "4.7.0",
+    "vite": "6.4.2"
+  }
+}

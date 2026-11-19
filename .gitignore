@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+
+# Web (see also web/.gitignore)
+web/node_modules/
+web/dist/
+web/public/py/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
