@@ -90,7 +90,7 @@ const starColor = ({ h, tier }, dark) =>
 
 // ---------------------------------------------------------------- board view
 
-function Board({ puzzle, walls, info, hues, dark, tool, selected, busy, celebrating, svgRef, handlers }) {
+function Board({ puzzle, walls, info, hues, dark, tool, selected, busy, celebrating, covered, svgRef, handlers }) {
   const { R, C, dots } = puzzle
   const m = MARGIN
   const ticks = []
@@ -102,11 +102,13 @@ function Board({ puzzle, walls, info, hues, dark, tool, selected, busy, celebrat
     const len = r % 5 === 0 ? 0.26 : 0.14
     ticks.push([-len, r, 0, r], [C, r, C + len, r])
   }
-  const cls = ['board', `tool-${tool}`, busy && 'is-busy', celebrating && 'is-celebrating'].filter(Boolean).join(' ')
+  const cls = ['board', `tool-${tool}`, busy && 'is-busy', celebrating && 'is-celebrating', covered && 'is-covered']
+    .filter(Boolean).join(' ')
 
   return (
     <svg ref={svgRef} className={cls} viewBox={`${-m} ${-m} ${C + 2 * m} ${R + 2 * m}`}
-      role="img" aria-label={`${R} by ${C} Galaxy puzzle with ${dots.length} centers`}
+      role="img" aria-label={covered ? `${R} by ${C} puzzle, hidden until you start`
+        : `${R} by ${C} Galaxy puzzle with ${dots.length} centers`}
       {...handlers}>
       <defs>
         <filter id="glow" x="-1" y="-1" width="3" height="3">
@@ -116,7 +118,7 @@ function Board({ puzzle, walls, info, hues, dark, tool, selected, busy, celebrat
 
       <rect x={0} y={0} width={C} height={R} style={{ fill: 'var(--board)' }} />
 
-      {info.display.map((k, i) => {
+      {!covered && info.display.map((k, i) => {
         if (k < 0) return null
         const r = Math.floor(i / C), c = i % C
         return (
@@ -140,7 +142,7 @@ function Board({ puzzle, walls, info, hues, dark, tool, selected, busy, celebrat
         ))}
       </g>
 
-      <g strokeWidth={WALL_WIDTH} strokeLinecap="round">
+      {!covered && <g strokeWidth={WALL_WIDTH} strokeLinecap="round">
         {walls.v.map((on, idx) => {
           if (!on) return null
           const r = Math.floor(idx / (C - 1)), c = idx % (C - 1)
@@ -155,18 +157,18 @@ function Board({ puzzle, walls, info, hues, dark, tool, selected, busy, celebrat
           return <line key={`wh${idx}`} x1={c} y1={r + 1} x2={c + 1} y2={r + 1} vectorEffect="non-scaling-stroke"
             style={{ stroke: bad ? 'var(--error)' : 'var(--ink)' }} />
         })}
-      </g>
+      </g>}
 
       {/* the outer frame is the outermost wall, so it shares the player's wall weight */}
       <rect x={0} y={0} width={C} height={R} fill="none" style={{ stroke: 'var(--ink)' }}
         strokeWidth={WALL_WIDTH} vectorEffect="non-scaling-stroke" />
 
-      {[...info.errCells].map(i => (
+      {!covered && [...info.errCells].map(i => (
         <circle key={`e${i}`} cx={(i % C) + 0.82} cy={Math.floor(i / C) + 0.18} r={0.075}
           style={{ fill: 'var(--error)' }} />
       ))}
 
-      {dots.map(([d0, d1], k) => {
+      {!covered && dots.map(([d0, d1], k) => {
         const cx = d1 / 2 + 0.5, cy = d0 / 2 + 0.5
         const isSel = tool === 'color' && k === selected
         const delay = { animationDelay: `${(cx + cy) * 30}ms` }
@@ -217,6 +219,9 @@ export default function App() {
   const [error, setError] = useState('')
   const [elapsed, setElapsed] = useState(0) // ms spent on the current puzzle
   const [visible, setVisible] = useState(() => !document.hidden)
+  // The board stays covered until Start, and covers again whenever the page is hidden,
+  // so nobody studies the puzzle off the clock.
+  const [started, setStarted] = useState(false)
   const svgRef = useRef(null)
   const drag = useRef(null)
   const dark = theme === 'dark'
@@ -250,6 +255,7 @@ export default function App() {
   }, [info, puzzle])
 
   const applyPuzzle = (pz, w, p, el = 0) => {
+    setStarted(false)
     setElapsed(el)
     setPuzzle(pz)
     setWalls(w)
@@ -294,11 +300,15 @@ export default function App() {
 
   // Timer: runs while an unsolved puzzle is on screen and the tab is visible.
   useEffect(() => {
-    const onVis = () => setVisible(!document.hidden)
+    const onVis = () => {
+      setVisible(!document.hidden)
+      if (document.hidden) setStarted(false)
+    }
     document.addEventListener('visibilitychange', onVis)
     return () => document.removeEventListener('visibilitychange', onVis)
   }, [])
-  const running = !!info && !info.solved && !busy && visible
+  const covered = !!info && !info.solved && !started
+  const running = !!info && !info.solved && !busy && visible && started
   useEffect(() => {
     if (!running) return
     let last = performance.now()
@@ -312,12 +322,12 @@ export default function App() {
   }, [running])
 
   const handleUndo = useCallback(() => {
-    if (!history.length) return
+    if (!history.length || covered) return
     const prev = history[history.length - 1]
     setWalls(prev.walls)
     setPaint(prev.paint)
     setHistory(history.slice(0, -1))
-  }, [history])
+  }, [history, covered])
 
   const handleReset = () => {
     if (!puzzle) return
@@ -374,7 +384,7 @@ export default function App() {
   }
 
   const onPointerDown = (e) => {
-    if (!info || info.solved || busy) return
+    if (!info || info.solved || busy || covered) return
     const [x, y] = toCell(e)
     if (tool === 'color') {
       const k = dotAt(puzzle.dots, x, y)
@@ -480,13 +490,20 @@ export default function App() {
       <div className="board-wrap">
         {puzzle && info ? (
           <Board puzzle={puzzle} walls={walls} info={info} hues={hues} dark={dark} tool={tool}
-            selected={selected} busy={busy} celebrating={celebrating} svgRef={svgRef}
+            selected={selected} busy={busy} celebrating={celebrating} covered={covered} svgRef={svgRef}
             handlers={{ onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp }} />
         ) : (
           <div className="board-empty">
             {error ? (
               <button className="text-button is-primary" onClick={() => generate(size)}>Try again</button>
             ) : 'Preparing the puzzle generator. The first one takes a few seconds.'}
+          </div>
+        )}
+        {covered && (
+          <div className="cover">
+            <button className="start-button" onClick={() => setStarted(true)} disabled={busy}>
+              {elapsed >= 1000 ? 'Resume' : 'Start'}
+            </button>
           </div>
         )}
       </div>
@@ -537,8 +554,8 @@ export default function App() {
           </button>
         </div>
         <div className="actions">
-          <button className="text-button" onClick={handleUndo} disabled={!history.length}>Undo</button>
-          <button className="text-button" onClick={handleReset} disabled={!puzzle || busy}>Reset</button>
+          <button className="text-button" onClick={handleUndo} disabled={!history.length || covered}>Undo</button>
+          <button className="text-button" onClick={handleReset} disabled={!puzzle || busy || covered}>Reset</button>
           <button className={`text-button${info?.solved ? ' is-primary' : ''}`} onClick={() => generate(size)} disabled={busy}>
             New puzzle
           </button>

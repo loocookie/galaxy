@@ -92,6 +92,30 @@
 .board.tool-line { cursor: crosshair; }
 .board.tool-color { cursor: pointer; }
 
+/* covered board: frame and graticule only, with the start button on top */
+.board.is-covered { cursor: default; }
+
+.cover {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.start-button {
+  border: 1.5px solid var(--ink);
+  background: var(--ink);
+  color: var(--board);
+  border-radius: 999px;
+  padding: 12px 36px;
+  font-size: 1.15rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  transition: transform 100ms ease-out, opacity 160ms ease;
+}
+.start-button:active:not(:disabled) { transform: scale(0.97); }
+.start-button:disabled { opacity: 0.35; cursor: default; }
+
 .board-empty {
   aspect-ratio: 1 / 1;
   display: grid;
