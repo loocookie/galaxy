@@ -94,11 +94,11 @@ const starColor = ({ h, tier }, dark) =>
 // ---------------------------------------------------------------- board view
 
 // Pencil marks in one cell, in the order they were added: m marks sit in rows of k = ceil(sqrt(m)),
-// so 1 is one big mark, 2 a pair, 3-4 a square, 5-6 rows of 3, and so on. Cell-relative coordinates.
+// so 1 is a single mark, 2 a pair, 3-4 a square, 5-6 rows of 3, and so on. Cell-relative coordinates.
+// A single mark keeps the 2x2 size, so it never reads as a star.
 function memoLayout(m) {
-  if (m === 1) return [{ x: 0.5, y: 0.5, r: 0.24 }]
   const k = Math.ceil(Math.sqrt(m)), rows = Math.ceil(m / k)
-  const pitch = 0.78 / k, r = pitch * 0.36
+  const pitch = 0.78 / k, r = (0.78 / Math.max(k, 2)) * 0.36
   const out = []
   for (let j = 0; j < rows; j++) {
     const n = Math.min(k, m - j * k)
