@@ -60,13 +60,16 @@ const LINK = (() => {
   return parseCode(p, codeOptions)
 })()
 
-const hasProgress = (s) => !!s && (s.walls.v.some(Boolean) || s.walls.h.some(Boolean) || s.paint.some(k => k >= 0))
+const hasProgress = (s) => !!s && (s.walls.v.some(Boolean) || s.walls.h.some(Boolean) ||
+  s.paint.some(k => k >= 0) || !!s.memo?.some(l => l.length))
+const emptyMemo = (n) => Array.from({ length: n }, () => [])
 
 function loadSave(n) {
   try {
     const s = JSON.parse(storage.get(saveKey(n)))
     if (s?.puzzle?.R === n && s.puzzle.C === n && s.walls && s.paint) {
-      return { ...s, elapsed: Number.isFinite(s.elapsed) && s.elapsed > 0 ? s.elapsed : 0 }
+      const memo = Array.isArray(s.memo) && s.memo.length === n * n ? s.memo : emptyMemo(n * n) // older saves
+      return { ...s, memo, elapsed: Number.isFinite(s.elapsed) && s.elapsed > 0 ? s.elapsed : 0 }
     }
   } catch { /* corrupt save */ }
   return null
@@ -90,7 +93,22 @@ const starColor = ({ h, tier }, dark) =>
 
 // ---------------------------------------------------------------- board view
 
-function Board({ puzzle, walls, info, hues, dark, tool, selected, busy, celebrating, covered, svgRef, handlers }) {
+// Pencil marks in one cell, in the order they were added: m marks sit in rows of k = ceil(sqrt(m)),
+// so 1 is one big mark, 2 a pair, 3-4 a square, 5-6 rows of 3, and so on. Cell-relative coordinates.
+function memoLayout(m) {
+  if (m === 1) return [{ x: 0.5, y: 0.5, r: 0.24 }]
+  const k = Math.ceil(Math.sqrt(m)), rows = Math.ceil(m / k)
+  const pitch = 0.78 / k, r = pitch * 0.36
+  const out = []
+  for (let j = 0; j < rows; j++) {
+    const n = Math.min(k, m - j * k)
+    const y = 0.5 + (j - (rows - 1) / 2) * pitch
+    for (let t = 0; t < n; t++) out.push({ x: 0.5 + (t - (n - 1) / 2) * pitch, y, r })
+  }
+  return out
+}
+
+function Board({ puzzle, walls, memo, info, hues, dark, tool, selected, busy, celebrating, covered, svgRef, handlers }) {
   const { R, C, dots } = puzzle
   const m = MARGIN
   const ticks = []
@@ -136,6 +154,15 @@ function Board({ puzzle, walls, info, hues, dark, tool, selected, busy, celebrat
         ))}
       </g>
 
+      {!covered && memo.map((list, i) => {
+        if (!list.length || info.display[i] >= 0) return null // a painted cell hides its marks
+        const r = Math.floor(i / C), c = i % C
+        return memoLayout(list.length).map((p, t) => (
+          <circle key={`m${i}-${list[t]}`} className="memo" cx={c + p.x} cy={r + p.y} r={p.r}
+            fill={starColor(hues[list[t]], dark)} />
+        ))
+      })}
+
       <g style={{ stroke: 'var(--ink)' }} strokeWidth={1.25}>
         {ticks.map(([x1, y1, x2, y2], t) => (
           <line key={`t${t}`} x1={x1} y1={y1} x2={x2} y2={y2} vectorEffect="non-scaling-stroke" />
@@ -170,7 +197,7 @@ function Board({ puzzle, walls, info, hues, dark, tool, selected, busy, celebrat
 
       {!covered && dots.map(([d0, d1], k) => {
         const cx = d1 / 2 + 0.5, cy = d0 / 2 + 0.5
-        const isSel = tool === 'color' && k === selected
+        const isSel = tool !== 'line' && k === selected
         const delay = { animationDelay: `${(cx + cy) * 30}ms` }
         return (
           <g key={`s${k}`}>
@@ -209,7 +236,10 @@ export default function App() {
   const [puzzle, setPuzzle] = useState(null)
   const [walls, setWalls] = useState(null)
   const [paint, setPaint] = useState(null)
-  const [tool, setTool] = useState('line')
+  const [memo, setMemo] = useState(null) // per cell, the star indices pencilled in, oldest first
+  const [mode, setMode] = useState('line') // 'line' | 'color'
+  const [memoOn, setMemoOn] = useState(false) // within color mode: pencil marks instead of paint
+  const tool = mode === 'color' && memoOn ? 'memo' : mode
   const [selected, setSelected] = useState(-1)
   const [history, setHistory] = useState([])
   const [busy, setBusy] = useState(false)
@@ -231,10 +261,10 @@ export default function App() {
   // saved once per second of play at most (elapsedSec), and on every move
   const elapsedSec = Math.floor(elapsed / 1000)
   useEffect(() => {
-    if (puzzle && walls && paint) {
-      storage.set(saveKey(puzzle.R), JSON.stringify({ puzzle, walls, paint, elapsed: elapsedSec * 1000 }))
+    if (puzzle && walls && paint && memo) {
+      storage.set(saveKey(puzzle.R), JSON.stringify({ puzzle, walls, paint, memo, elapsed: elapsedSec * 1000 }))
     }
-  }, [puzzle, walls, paint, elapsedSec])
+  }, [puzzle, walls, paint, memo, elapsedSec])
 
   const hues = useMemo(() => (puzzle ? assignHues(puzzle.dots) : []), [puzzle])
   const blocked = useMemo(() => (puzzle ? blockedWalls(puzzle.R, puzzle.C, puzzle.dots) : null), [puzzle])
@@ -254,12 +284,13 @@ export default function App() {
     return () => clearTimeout(t)
   }, [info, puzzle])
 
-  const applyPuzzle = (pz, w, p, el = 0) => {
+  const applyPuzzle = (pz, w, p, mm, el = 0) => {
     setStarted(false)
     setElapsed(el)
     setPuzzle(pz)
     setWalls(w)
     setPaint(p)
+    setMemo(mm)
     setHistory([])
     setSelected(-1)
   }
@@ -271,7 +302,7 @@ export default function App() {
     try {
       const pz = await requestPuzzle(n, seed)
       if (token !== genToken.current) return // superseded by a newer request
-      applyPuzzle({ ...pz, v: GEN_VERSION }, emptyWalls(n, n), Array(n * n).fill(-1))
+      applyPuzzle({ ...pz, v: GEN_VERSION }, emptyWalls(n, n), Array(n * n).fill(-1), emptyMemo(n * n))
       setWarm(true)
     } catch {
       if (token === genToken.current) setError("Couldn't generate a puzzle. Check your connection, then try again.")
@@ -290,7 +321,7 @@ export default function App() {
     if (savedMatches) {
       genToken.current++ // drop any generation still in flight
       setBusy(false)
-      applyPuzzle(saved.puzzle, saved.walls, saved.paint, saved.elapsed)
+      applyPuzzle(saved.puzzle, saved.walls, saved.paint, saved.memo, saved.elapsed)
     } else {
       setPuzzle(null)
       generate(n, seed)
@@ -326,14 +357,21 @@ export default function App() {
     const prev = history[history.length - 1]
     setWalls(prev.walls)
     setPaint(prev.paint)
+    setMemo(prev.memo)
     setHistory(history.slice(0, -1))
   }, [history, covered])
 
+  // From line mode, M (or the button) goes straight to pencilling; within color mode it toggles.
+  const toggleMemo = useCallback(() => {
+    if (mode === 'line') { setMode('color'); setMemoOn(true) } else setMemoOn(on => !on)
+  }, [mode])
+
   const handleReset = () => {
     if (!puzzle) return
-    setHistory(h => [...h.slice(-199), { walls, paint }])
+    setHistory(h => [...h.slice(-199), { walls, paint, memo }])
     setWalls(emptyWalls(puzzle.R, puzzle.C))
     setPaint(Array(puzzle.R * puzzle.C).fill(-1))
+    setMemo(emptyMemo(puzzle.R * puzzle.C))
   }
 
   useEffect(() => {
@@ -342,12 +380,14 @@ export default function App() {
       if (e.target instanceof HTMLInputElement) return // typing a code, not playing
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndo(); return }
       if (e.ctrlKey || e.metaKey || e.altKey) return
-      if (e.key.toLowerCase() === 'l') setTool('line')
-      if (e.key.toLowerCase() === 'c') setTool('color')
+      const key = e.key.toLowerCase()
+      if (key === 'l') setMode('line')
+      if (key === 'c') setMode('color')
+      if (key === 'm') toggleMemo()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [handleUndo])
+  }, [handleUndo, toggleMemo])
 
   // ---------------------------------------------------------------- pointer input
   const toCell = (e) => {
@@ -368,6 +408,12 @@ export default function App() {
       const arr = d.work[w.t]
       if (d.value === null) d.value = arr[w.idx] ? 0 : 1
       if (arr[w.idx] !== d.value) { arr[w.idx] = d.value; d.changed = true }
+    } else if (d.kind === 'memo') {
+      const i = cellAt(x, y)
+      if (i < 0 || info.display[i] >= 0) return
+      const list = d.work[i], has = list.includes(selected)
+      if (d.action === 'add' && !has) { d.work[i] = [...list, selected]; d.changed = true }
+      if (d.action === 'remove' && has) { d.work[i] = list.filter(k => k !== selected); d.changed = true }
     } else {
       const i = cellAt(x, y)
       if (i < 0) return
@@ -380,24 +426,36 @@ export default function App() {
     const d = drag.current
     if (!d.changed) return
     if (d.kind === 'line') setWalls({ v: [...d.work.v], h: [...d.work.h] })
+    else if (d.kind === 'memo') setMemo([...d.work])
     else setPaint([...d.work])
   }
 
   const onPointerDown = (e) => {
     if (!info || info.solved || busy || covered) return
     const [x, y] = toCell(e)
-    if (tool === 'color') {
+    const snap = { walls, paint, memo }
+    if (tool !== 'line') {
       const k = dotAt(puzzle.dots, x, y)
       if (k >= 0) { setSelected(s => (s === k ? -1 : k)); return } // tap the picked star again to drop it
       const i = cellAt(x, y)
       if (i < 0) return
+      if (tool === 'memo') {
+        // the first cell decides whether this stroke adds or removes the picked color's mark
+        if (selected < 0 || info.display[i] >= 0) return
+        const action = memo[i].includes(selected) ? 'remove' : 'add'
+        drag.current = { kind: 'memo', action, work: [...memo], snap, changed: false, last: [x, y] }
+        e.currentTarget.setPointerCapture(e.pointerId)
+        applyAt(x, y)
+        flush()
+        return
+      }
       const action = paint[i] >= 0 ? 'erase' : selected >= 0 ? 'paint' : null
       if (!action) return
-      drag.current = { kind: 'color', action, work: [...paint], snap: { walls, paint }, changed: false, last: [x, y] }
+      drag.current = { kind: 'color', action, work: [...paint], snap, changed: false, last: [x, y] }
     } else {
       drag.current = {
         kind: 'line', value: null, work: { v: [...walls.v], h: [...walls.h] },
-        snap: { walls, paint }, changed: false, last: [x, y],
+        snap, changed: false, last: [x, y],
       }
     }
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -488,8 +546,8 @@ export default function App() {
       </header>
 
       <div className="board-wrap">
-        {puzzle && info ? (
-          <Board puzzle={puzzle} walls={walls} info={info} hues={hues} dark={dark} tool={tool}
+        {puzzle && info && memo ? (
+          <Board puzzle={puzzle} walls={walls} memo={memo} info={info} hues={hues} dark={dark} tool={tool}
             selected={selected} busy={busy} celebrating={celebrating} covered={covered} svgRef={svgRef}
             handlers={{ onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp }} />
         ) : (
@@ -546,11 +604,23 @@ export default function App() {
       </div>
 
       <div className="toolbar">
-        <div className="segmented" role="group" aria-label="Tool">
-          <button aria-pressed={tool === 'line'} onClick={() => setTool('line')}>Line</button>
-          <button aria-pressed={tool === 'color'} onClick={() => setTool('color')}>
-            Color
-            <span className="swatch" style={{ background: selected >= 0 && hues[selected] !== undefined ? starColor(hues[selected], dark) : 'transparent' }} />
+        <div className="tool-group">
+          <div className="segmented" role="group" aria-label="Tool">
+            <button aria-pressed={mode === 'line'} onClick={() => setMode('line')}>Line</button>
+            <button aria-pressed={mode === 'color'} onClick={() => setMode('color')}>
+              Color
+              <span className="swatch" style={{ background: selected >= 0 && hues[selected] !== undefined ? starColor(hues[selected], dark) : 'transparent' }} />
+            </button>
+          </div>
+          {/* only meaningful in color mode; hidden, not removed, so the row never shifts under a thumb */}
+          <button className={`memo-toggle${mode === 'color' ? '' : ' is-hidden'}`} aria-pressed={memoOn}
+            onClick={toggleMemo} tabIndex={mode === 'color' ? 0 : -1} aria-hidden={mode !== 'color'}
+            title="Pencil marks (M)">
+            <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 20 l1.2-4.6 L15.6 5 a2.1 2.1 0 0 1 3 0 l0.4 0.4 a2.1 2.1 0 0 1 0 3 L8.6 18.8 Z"
+                fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+            </svg>
+            Memo
           </button>
         </div>
         <div className="actions">
@@ -563,7 +633,8 @@ export default function App() {
       </div>
 
       <p className="hint">
-        Draw walls with <kbd>L</kbd>, paint with <kbd>C</kbd>. In paint mode, tap a star to pick its color and tap it again to put it down.
+        Draw walls with <kbd>L</kbd>, paint with <kbd>C</kbd>, pencil in candidates with <kbd>M</kbd>.
+        In color mode, tap a star to pick its color and tap it again to put it down.
         Undo with <kbd>Ctrl</kbd>+<kbd>Z</kbd>.
       </p>
     </main>
