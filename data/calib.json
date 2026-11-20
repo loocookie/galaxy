@@ -1,0 +1,273 @@
+[
+ {
+  "n": 7,
+  "seed": 750309116,
+  "status": "solved",
+  "level": 0,
+  "score": 44.0,
+  "regions": 8,
+  "t": 0.006827600000178791,
+  "label": "7A",
+  "code": "2-7-2cb8cefc"
+ },
+ {
+  "n": 7,
+  "seed": 539799898,
+  "status": "solved",
+  "level": 2,
+  "score": 125.0,
+  "regions": 11,
+  "t": 0.002110800000082236,
+  "label": "7B",
+  "code": "2-7-202cb15a"
+ },
+ {
+  "n": 7,
+  "seed": 1783691772,
+  "status": "solved",
+  "level": 0,
+  "score": 20.0,
+  "regions": 12,
+  "t": 0.0002965000003314344,
+  "label": "7C",
+  "code": "2-7-6a50f9fc"
+ },
+ {
+  "n": 7,
+  "seed": 346705521,
+  "status": "solved",
+  "level": 0,
+  "score": 27.0,
+  "regions": 12,
+  "t": 0.0011431000002630753,
+  "label": "7D",
+  "code": "2-7-14aa4e71"
+ },
+ {
+  "n": 7,
+  "seed": 569590672,
+  "status": "solved",
+  "level": 0,
+  "score": 12.0,
+  "regions": 12,
+  "t": 0.0003133000000161701,
+  "label": "7E",
+  "code": "2-7-21f34390"
+ },
+ {
+  "n": 7,
+  "seed": 1637235415,
+  "status": "solved",
+  "level": 0,
+  "score": 23.0,
+  "regions": 11,
+  "t": 0.00036810000074183336,
+  "label": "7F",
+  "code": "2-7-61963ad7"
+ },
+ {
+  "n": 7,
+  "seed": 1830188481,
+  "status": "solved",
+  "level": 0,
+  "score": 17.0,
+  "regions": 12,
+  "t": 0.0003225999998903717,
+  "label": "7G",
+  "code": "2-7-6d1675c1"
+ },
+ {
+  "n": 7,
+  "seed": 1704493938,
+  "status": "solved",
+  "level": 0,
+  "score": 32.0,
+  "regions": 10,
+  "t": 0.0003615000005083857,
+  "label": "7H",
+  "code": "2-7-65988372"
+ },
+ {
+  "n": 10,
+  "seed": 338562968,
+  "status": "solved",
+  "level": 0,
+  "score": 54.0,
+  "regions": 24,
+  "t": 0.0010999000005540438,
+  "label": "10A",
+  "code": "2-10-142e0f98"
+ },
+ {
+  "n": 10,
+  "seed": 1682930409,
+  "status": "solved",
+  "level": 0,
+  "score": 47.0,
+  "regions": 20,
+  "t": 0.000991200000498793,
+  "label": "10B",
+  "code": "2-10-644f7ae9"
+ },
+ {
+  "n": 10,
+  "seed": 1731169707,
+  "status": "solved",
+  "level": 1,
+  "score": 174.0,
+  "regions": 19,
+  "t": 0.02110660000016651,
+  "label": "10C",
+  "code": "2-10-672f8dab"
+ },
+ {
+  "n": 10,
+  "seed": 948915236,
+  "status": "solved",
+  "level": 0,
+  "score": 41.0,
+  "regions": 19,
+  "t": 0.0011068000003433554,
+  "label": "10D",
+  "code": "2-10-388f4c24"
+ },
+ {
+  "n": 10,
+  "seed": 944339218,
+  "status": "solved",
+  "level": 1,
+  "score": 70.0,
+  "regions": 21,
+  "t": 0.0013964999998279382,
+  "label": "10E",
+  "code": "2-10-38497912"
+ },
+ {
+  "n": 10,
+  "seed": 1908894567,
+  "status": "solved",
+  "level": 0,
+  "score": 33.0,
+  "regions": 22,
+  "t": 0.001142699999945762,
+  "label": "10F",
+  "code": "2-10-71c76b67"
+ },
+ {
+  "n": 10,
+  "seed": 2100041964,
+  "status": "solved",
+  "level": 0,
+  "score": 65.0,
+  "regions": 16,
+  "t": 0.0010814999996000552,
+  "label": "10G",
+  "code": "2-10-7d2c18ec"
+ },
+ {
+  "n": 10,
+  "seed": 1963386834,
+  "status": "solved",
+  "level": 1,
+  "score": 53.0,
+  "regions": 24,
+  "t": 0.0015198000000964385,
+  "label": "10H",
+  "code": "2-10-7506e7d2"
+ },
+ {
+  "n": 15,
+  "seed": 965717818,
+  "status": "solved",
+  "level": 1,
+  "score": 1741.0,
+  "regions": 45,
+  "t": 5.512794600000234,
+  "label": "15A",
+  "code": "2-15-398faf3a"
+ },
+ {
+  "n": 15,
+  "seed": 1797999046,
+  "status": "solved",
+  "level": 1,
+  "score": 136.0,
+  "regions": 49,
+  "t": 0.09731939999983297,
+  "label": "15B",
+  "code": "2-15-6b2b49c6"
+ },
+ {
+  "n": 15,
+  "seed": 1762833266,
+  "status": "solved",
+  "level": 1,
+  "score": 706.0,
+  "regions": 43,
+  "t": 1.9148539999996501,
+  "label": "15C",
+  "code": "2-15-6912b372"
+ },
+ {
+  "n": 15,
+  "seed": 1620234906,
+  "status": "solved",
+  "level": 1,
+  "score": 265.0,
+  "regions": 46,
+  "t": 1.3710919999994076,
+  "label": "15D",
+  "code": "2-15-6092d29a"
+ },
+ {
+  "n": 15,
+  "seed": 1344967606,
+  "status": "solved",
+  "level": 2,
+  "score": 7579.0,
+  "regions": 36,
+  "t": 323.6111959,
+  "label": "15E",
+  "code": "2-15-502a93b6"
+ },
+ {
+  "n": 15,
+  "seed": 1732465373,
+  "status": "solved",
+  "level": 1,
+  "score": 110.0,
+  "regions": 49,
+  "t": 0.05794010000045091,
+  "label": "15F",
+  "code": "2-15-674352dd"
+ },
+ {
+  "n": 15,
+  "seed": 496418662,
+  "status": "solved",
+  "level": 0,
+  "score": 95.0,
+  "regions": 46,
+  "t": 0.008762100000240025,
+  "label": "15G",
+  "code": "2-15-1d96bf66"
+ },
+ {
+  "n": 15,
+  "seed": 1042189272,
+  "status": "timeout",
+  "label": "15H",
+  "code": "2-15-3e1e8bd8"
+ },
+ {
+  "n": 15,
+  "seed": 1397715735,
+  "status": "solved",
+  "level": 1,
+  "score": 5216.0,
+  "regions": 49,
+  "t": 5.758618299999398,
+  "label": "15I",
+  "code": "2-15-534f7317"
+ }
+]
