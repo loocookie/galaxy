@@ -16,7 +16,7 @@ Dot = tuple[int, int]
 # Share codes (web UI) are "version-size-seed". A seed only reproduces the same puzzle with
 # the same generator, so bump this whenever generate_sim (or anything it calls, or the web
 # worker's accept loop) changes the puzzle a given seed produces. The web build reads it.
-GENERATOR_VERSION = 1
+GENERATOR_VERSION = 2
 
 
 class Board:
@@ -322,7 +322,20 @@ class SolveResult:
         return (self.max_level, self.score)
 
 
+class _Contradiction(Exception):
+    pass
+
+
 class Solver:
+    """Human-style solver.
+
+    State per cell: own[i] (dot index or -1) and cand[i], a bitmask of the dots cell i may
+    still belong to. Elimination is incremental: every removed candidate (i, k) is queued,
+    its mirror about k loses k too (rules 1 and 3), and dot k is marked dirty so only its
+    reachability (rule 2) is recomputed. Trials are bounded by the cheapest contradiction
+    found so far. Results are identical to the original set-based solver.
+    """
+
     def __init__(self, R: int, C: int, dots: list[Dot], max_level: int = 2, trial_mult: float = 4.0):
         self.b = b = Board(R, C)
         self.dots = list(dots)
@@ -341,51 +354,68 @@ class Solver:
         self.mir = [[b.mirror(i, d) for i in range(b.N)] for d in self.dots]
 
     # --- state helpers
-    def _initial(self) -> tuple[list[int], list[set[int]]]:
-        N = self.b.N
+    def _initial(self):
+        """Returns (own, cand, queue, dirty) before any elimination."""
+        N, D, mir = self.b.N, self.D, self.mir
         own = [-1] * N
+        cand = [(1 << D) - 1] * N
+        queue: list[tuple[int, int]] = []
+        for i in range(N):
+            for k in range(D):
+                if mir[k][i] < 0:
+                    cand[i] &= ~(1 << k)
+                    queue.append((i, k))
         for k, core in enumerate(self.cores):
             for i in core:
                 own[i] = k
-        cand = [{own[i]} if own[i] >= 0 else {k for k in range(self.D) if self.mir[k][i] >= 0}
-                for i in range(N)]
-        return own, cand
+                self._keep_only(cand, i, k, queue)
+        return own, cand, queue, set(range(D))
 
-    def _eliminate(self, own: list[int], cand: list[set[int]]) -> bool:
-        """Apply rules 1-3 to a fixpoint. Returns False on contradiction."""
-        N, nbrs, mir = self.b.N, self.b.nbrs, self.mir
-        changed = True
-        while changed:
-            changed = False
-            # rules 1 & 3: mirror must exist and still allow k (owned cells have cand == {own})
-            for i in range(N):
-                if own[i] >= 0:
-                    continue
-                rm = [k for k in cand[i] if mir[k][i] < 0 or k not in cand[mir[k][i]]]
-                if rm:
-                    cand[i].difference_update(rm)
-                    changed = True
-                    if not cand[i]:
+    @staticmethod
+    def _keep_only(cand, i, k, queue):
+        """Restrict cell i to dot k, queueing every removed candidate."""
+        rest = cand[i] & ~(1 << k)
+        cand[i] = 1 << k
+        while rest:
+            low = rest & -rest
+            queue.append((i, low.bit_length() - 1))
+            rest ^= low
+
+    def _eliminate(self, cand, queue, dirty) -> bool:
+        """Apply rules 1-3 to a fixpoint, starting from the queued removals and dirty dots.
+        Returns False on contradiction (a cell with no candidate left)."""
+        N, nbrs, mir, cores = self.b.N, self.b.nbrs, self.mir, self.cores
+        while queue or dirty:
+            while queue:
+                i, k = queue.pop()
+                dirty.add(k)  # losing cell i may cut dot k's region apart (rule 2)
+                m = mir[k][i]
+                bit = 1 << k
+                if m >= 0 and cand[m] & bit:
+                    c = cand[m] & ~bit
+                    if not c:
                         return False
-            # rule 2: reachable from the core through cells that allow k
-            for k in range(self.D):
-                core = self.cores[k]
+                    cand[m] = c
+                    queue.append((m, k))
+            if dirty:
+                k = dirty.pop()
+                bit = 1 << k
+                core = cores[k]
                 seen = set(core)
                 st = list(core)
                 while st:
                     x = st.pop()
                     for y in nbrs[x]:
-                        if y not in seen and k in cand[y]:
+                        if y not in seen and cand[y] & bit:
                             seen.add(y)
                             st.append(y)
                 for i in range(N):
-                    if i not in seen and k in cand[i]:
-                        if own[i] == k:
+                    if cand[i] & bit and i not in seen:
+                        c = cand[i] & ~bit
+                        if not c:
                             return False
-                        cand[i].discard(k)
-                        changed = True
-                        if not cand[i]:
-                            return False
+                        cand[i] = c
+                        queue.append((i, k))
         return True
 
     def _block(self, own: list[int], k: int) -> list[tuple[int, int]]:
@@ -401,8 +431,8 @@ class Solver:
                     st.append(y)
         return [divmod(x, C) for x in seen]
 
-    def _assign_round(self, own: list[int], cand: list[set[int]]) -> float | None:
-        singles = [i for i in range(self.b.N) if own[i] < 0 and len(cand[i]) == 1]
+    def _assign_round(self, own, cand, queue) -> float | None:
+        singles = [i for i in range(self.b.N) if own[i] < 0 and cand[i] & (cand[i] - 1) == 0]
         if not singles:
             return None
         C = self.b.C
@@ -411,50 +441,71 @@ class Solver:
         for i in singles:
             if own[i] >= 0:
                 continue  # assigned as a mirror earlier this round
-            k = next(iter(cand[i]))
+            k = cand[i].bit_length() - 1
             m = self.mir[k][i]
+            if not cand[m] >> k & 1:
+                # an earlier assignment this round gave the mirror to another dot: the
+                # current assumptions contradict each other (the old set-based solver
+                # silently overwrote the mirror here and missed this)
+                raise _Contradiction
             if k not in blocks:
                 blocks[k] = self._block(own, k)
             best = min((r - br) ** 2 + (c - bc) ** 2
                        for x in (i, m) for r, c in (divmod(x, C),) for br, bc in blocks[k])
             own[i] = own[m] = k
-            cand[i], cand[m] = {k}, {k}
+            self._keep_only(cand, i, k, queue)
+            self._keep_only(cand, m, k, queue)
             cost += best
         return cost
 
-    def _propagate(self, own, cand, level: int, steps: list | None):
-        """Returns (status, cost, rounds, max_level_used). Mutates own/cand."""
+    def _propagate(self, own, cand, queue, dirty, level: int, steps: list | None,
+                   budget: float = float('inf')):
+        """Returns (status, cost, rounds, max_level_used); status is 'contra', 'solved',
+        'stuck', or 'over' (cost reached `budget`, so this branch cannot beat the caller's
+        best). Mutates own/cand/queue/dirty."""
+        N, mir = self.b.N, self.mir
         cost, rounds, used = 0.0, 0, 0
         while True:
-            if not self._eliminate(own, cand):
+            if not self._eliminate(cand, queue, dirty):
                 return 'contra', cost, rounds, used
             if all(o >= 0 for o in own):
                 return 'solved', cost, rounds, used
-            c = self._assign_round(own, cand)
+            try:
+                c = self._assign_round(own, cand, queue)
+            except _Contradiction:
+                return 'contra', cost, rounds, used
             if c is not None:
                 cost += c
                 rounds += 1
                 if steps is not None:
                     steps.append((0, c))
+                if cost >= budget:
+                    return 'over', cost, rounds, used
                 continue
             found = None
             for lv in range(1, level + 1):
                 best = None
                 tried: set[tuple[int, int]] = set()
-                for i in range(self.b.N):
+                for i in range(N):
                     if own[i] >= 0:
                         continue
-                    for k in sorted(cand[i]):
-                        m = self.mir[k][i]
+                    x = cand[i]
+                    while x:
+                        low = x & -x
+                        x ^= low
+                        k = low.bit_length() - 1
+                        m = mir[k][i]
                         key = (min(i, m), k)
                         if key in tried:
                             continue
                         tried.add(key)
-                        o2, c2 = own[:], [set(s) for s in cand]
+                        o2, c2, q2 = own[:], cand[:], []
                         o2[i] = o2[m] = k
-                        c2[i], c2[m] = {k}, {k}
-                        st, cc, _, _ = self._propagate(o2, c2, lv - 1, None)
-                        if st == 'contra' and (best is None or cc < best[0]):
+                        self._keep_only(c2, i, k, q2)
+                        self._keep_only(c2, m, k, q2)
+                        bound = best[0] if best is not None else float('inf')
+                        st, cc, _, _ = self._propagate(o2, c2, q2, set(), lv - 1, None, bound)
+                        if st == 'contra' and cc < bound:
                             best = (cc, i, k)
                 if best is not None:
                     found = (lv, best)
@@ -463,39 +514,48 @@ class Solver:
                 return 'stuck', cost, rounds, used
             lv, (cc, i, k) = found
             step_cost = self.trial_mult ** lv * (1 + cc)
-            cand[i].discard(k)
-            cand[self.mir[k][i]].discard(k)
+            bit = 1 << k
+            cand[i] &= ~bit
+            queue.append((i, k))  # the mirror loses k through the queue
+            dirty.add(k)
             cost += step_cost
             rounds += 1
             used = max(used, lv)
             if steps is not None:
                 steps.append((lv, step_cost))
+            if cost >= budget:
+                return 'over', cost, rounds, used
 
     def count_solutions(self, limit: int = 2) -> int:
         """Exact search (basic propagation + branching); counts solutions up to `limit`."""
-        def rec(own, cand) -> int:
-            st, _, _, _ = self._propagate(own, cand, 0, None)
+        def rec(own, cand, queue, dirty) -> int:
+            st, _, _, _ = self._propagate(own, cand, queue, dirty, 0, None)
             if st == 'contra':
                 return 0
             if st == 'solved':
                 return 1
-            i = min((i for i in range(self.b.N) if own[i] < 0), key=lambda i: len(cand[i]))
+            i = min((i for i in range(self.b.N) if own[i] < 0), key=lambda i: cand[i].bit_count())
             total = 0
-            for k in sorted(cand[i]):
-                o2, c2 = own[:], [set(s) for s in cand]
+            x = cand[i]
+            while x:
+                low = x & -x
+                x ^= low
+                k = low.bit_length() - 1
+                o2, c2, q2 = own[:], cand[:], []
                 m = self.mir[k][i]
                 o2[i] = o2[m] = k
-                c2[i], c2[m] = {k}, {k}
-                total += rec(o2, c2)
+                self._keep_only(c2, i, k, q2)
+                self._keep_only(c2, m, k, q2)
+                total += rec(o2, c2, q2, set())
                 if total >= limit:
                     break
             return total
         return rec(*self._initial())
 
     def solve(self) -> SolveResult:
-        own, cand = self._initial()
+        own, cand, queue, dirty = self._initial()
         steps: list[tuple[int, float]] = []
-        st, cost, rounds, used = self._propagate(own, cand, self.max_level, steps)
+        st, cost, rounds, used = self._propagate(own, cand, queue, dirty, self.max_level, steps)
         return SolveResult(st, own, used, cost, rounds, steps)
 
 

@@ -536,7 +536,7 @@ export default function App() {
               <label className="share-label" htmlFor="code-input">Play a shared puzzle</label>
               <div className="share-row">
                 <input id="code-input" className="share-input" value={codeInput} autoComplete="off" spellCheck={false}
-                  placeholder="1-10-3f2a91c0 or a link" onChange={e => { setCodeInput(e.target.value); setShareError('') }} />
+                  placeholder="2-10-3f2a91c0 or a link" onChange={e => { setCodeInput(e.target.value); setShareError('') }} />
                 <button className="text-button" type="submit" disabled={!codeInput.trim()}>Open</button>
               </div>
             </form>

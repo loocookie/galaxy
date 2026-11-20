@@ -30,7 +30,7 @@ export function shareLink(code, location = window.location) {
 }
 
 export const codeError = {
-  format: 'That isn’t a puzzle code. Codes look like 1-10-3f2a91c0.',
+  format: 'That isn’t a puzzle code. Codes look like 2-10-3f2a91c0.',
   size: 'That code is for a board size this page doesn’t offer.',
   version: 'That code comes from a different version of the generator, so it would make a different puzzle.',
 }
