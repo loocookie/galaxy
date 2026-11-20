@@ -13,6 +13,11 @@ from typing import Callable
 
 Dot = tuple[int, int]
 
+# Share codes (web UI) are "version-size-seed". A seed only reproduces the same puzzle with
+# the same generator, so bump this whenever generate_sim (or anything it calls, or the web
+# worker's accept loop) changes the puzzle a given seed produces. The web build reads it.
+GENERATOR_VERSION = 1
+
 
 class Board:
     def __init__(self, R: int, C: int):

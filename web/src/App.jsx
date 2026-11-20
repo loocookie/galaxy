@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { analyze, assignHues, blockedWalls, emptyWalls, wallAt, dotAt } from './board.js'
+import { formatCode, parseCode, shareLink, codeError, MAX_SEED } from './share.js'
 import './App.css'
 
 const SIZES = [7, 10, 15]
@@ -7,6 +8,9 @@ const MARGIN = 0.45 // room around the board for the chart's tick frame, in cell
 const WALL_WIDTH = 3.5 // px, player walls and the outer frame
 const saveKey = (n) => `galaxy_${n}x${n}`
 const LAST_SIZE_KEY = 'galaxy_last_size'
+/* global __GEN_VERSION__ */
+const GEN_VERSION = __GEN_VERSION__ // GENERATOR_VERSION from galaxy.py, injected by vite.config.js
+const codeOptions = { version: GEN_VERSION, sizes: SIZES }
 
 const storage = {
   get(key) { try { return localStorage.getItem(key) } catch { return null } },
@@ -37,13 +41,26 @@ function getWorker() {
   return worker
 }
 
-function requestPuzzle(n) {
+function requestPuzzle(n, seed = null) {
   return new Promise((resolve, reject) => {
     const id = ++reqId
     pending.set(id, { resolve, reject })
-    getWorker().postMessage({ id, R: n, C: n, seed: Math.floor(Math.random() * 2 ** 31) })
+    getWorker().postMessage({ id, R: n, C: n, seed: seed ?? Math.floor(Math.random() * MAX_SEED) })
   })
 }
+
+// A shared link (?p=<code>) is read once at startup, then removed from the address bar so a
+// later refresh resumes the saved game instead of re-opening the link.
+const LINK = (() => {
+  const p = new URLSearchParams(window.location.search).get('p')
+  if (p === null) return null
+  const url = new URL(window.location.href)
+  url.searchParams.delete('p')
+  window.history.replaceState(null, '', url)
+  return parseCode(p, codeOptions)
+})()
+
+const hasProgress = (s) => !!s && (s.walls.v.some(Boolean) || s.walls.h.some(Boolean) || s.paint.some(k => k >= 0))
 
 function loadSave(n) {
   try {
@@ -174,10 +191,19 @@ function Board({ puzzle, walls, info, hues, dark, tool, selected, busy, celebrat
 export default function App() {
   const [theme, setTheme] = useState(() =>
     window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-  const [size, setSize] = useState(() => {
+  // which game to show: a size, plus a seed when opening a shared code (null = saved or random)
+  const [request, setRequest] = useState(() => {
+    if (LINK?.ok) return { size: LINK.size, seed: LINK.seed }
     const n = Number(storage.get(LAST_SIZE_KEY))
-    return SIZES.includes(n) ? n : 10
+    return { size: SIZES.includes(n) ? n : 10, seed: null }
   })
+  const size = request.size
+  const genToken = useRef(0) // only the latest generation request may apply its result
+  const [shareOpen, setShareOpen] = useState(() => !!LINK && !LINK.ok)
+  const [shareError, setShareError] = useState(() => (LINK && !LINK.ok ? codeError[LINK.reason] : ''))
+  const [codeInput, setCodeInput] = useState('')
+  const [copied, setCopied] = useState(false)
+  const shareRef = useRef(null)
   const [puzzle, setPuzzle] = useState(null)
   const [walls, setWalls] = useState(null)
   const [paint, setPaint] = useState(null)
@@ -232,28 +258,39 @@ export default function App() {
     setSelected(-1)
   }
 
-  const generate = useCallback(async (n) => {
+  const generate = useCallback(async (n, seed = null) => {
+    const token = ++genToken.current
     setBusy(true)
     setError('')
     try {
-      const pz = await requestPuzzle(n)
-      applyPuzzle(pz, emptyWalls(n, n), Array(n * n).fill(-1))
+      const pz = await requestPuzzle(n, seed)
+      if (token !== genToken.current) return // superseded by a newer request
+      applyPuzzle({ ...pz, v: GEN_VERSION }, emptyWalls(n, n), Array(n * n).fill(-1))
       setWarm(true)
     } catch {
-      setError("Couldn't generate a puzzle. Check your connection, then try again.")
+      if (token === genToken.current) setError("Couldn't generate a puzzle. Check your connection, then try again.")
     } finally {
-      setBusy(false)
+      if (token === genToken.current) setBusy(false)
     }
   }, [])
 
-  // load (or generate) whenever the size changes
+  // open the requested game: the saved one for this size (if it matches), or generate
   useEffect(() => {
-    storage.set(LAST_SIZE_KEY, String(size))
-    const saved = loadSave(size)
-    if (saved) applyPuzzle(saved.puzzle, saved.walls, saved.paint, saved.elapsed)
-    else { setPuzzle(null); generate(size) }
+    const { size: n, seed } = request
+    storage.set(LAST_SIZE_KEY, String(n))
+    const saved = loadSave(n)
+    const savedMatches = saved && (seed === null ||
+      (saved.puzzle.seed === seed && (saved.puzzle.v ?? 1) === GEN_VERSION))
+    if (savedMatches) {
+      genToken.current++ // drop any generation still in flight
+      setBusy(false)
+      applyPuzzle(saved.puzzle, saved.walls, saved.paint, saved.elapsed)
+    } else {
+      setPuzzle(null)
+      generate(n, seed)
+    }
     getWorker() // warm Pyodide up even when a saved game was restored
-  }, [size, generate])
+  }, [request, generate])
 
   // Timer: runs while an unsolved puzzle is on screen and the tab is visible.
   useEffect(() => {
@@ -291,6 +328,8 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e) => {
+      if (e.key === 'Escape') { setShareOpen(false); return }
+      if (e.target instanceof HTMLInputElement) return // typing a code, not playing
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndo(); return }
       if (e.ctrlKey || e.metaKey || e.altKey) return
       if (e.key.toLowerCase() === 'l') setTool('line')
@@ -373,6 +412,45 @@ export default function App() {
     if (d?.changed) setHistory(h => [...h.slice(-199), d.snap])
   }
 
+  // ---------------------------------------------------------------- sharing
+  const code = puzzle && Number.isInteger(puzzle.seed) ? formatCode(puzzle.v ?? 1, puzzle.R, puzzle.seed) : ''
+  const link = code ? shareLink(code) : ''
+
+  useEffect(() => {
+    if (!shareOpen) return
+    const onDown = (e) => { if (shareRef.current && !shareRef.current.contains(e.target)) setShareOpen(false) }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [shareOpen])
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(link)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1600)
+    } catch {
+      setShareError('Copying isn\u2019t allowed here. Select the link above and copy it.')
+    }
+  }
+
+  const openCode = (e) => {
+    e.preventDefault()
+    const p = parseCode(codeInput, codeOptions)
+    if (!p.ok) { setShareError(codeError[p.reason]); return }
+    const same = puzzle && puzzle.R === p.size && puzzle.seed === p.seed && (puzzle.v ?? 1) === p.version
+    if (!same) {
+      const saved = loadSave(p.size)
+      const unfinished = saved && hasProgress(saved) && !analyze(saved.puzzle, saved.walls, saved.paint).solved
+      const differs = saved && !(saved.puzzle.seed === p.seed && (saved.puzzle.v ?? 1) === p.version)
+      if (unfinished && differs &&
+        !window.confirm(`Opening this code replaces your unfinished ${p.size} \u00d7 ${p.size} puzzle.`)) return
+      setRequest({ size: p.size, seed: p.seed })
+    }
+    setShareError('')
+    setCodeInput('')
+    setShareOpen(false)
+  }
+
   // ---------------------------------------------------------------- render
   let status = ''
   if (error) status = error
@@ -386,7 +464,7 @@ export default function App() {
         <div className="header-controls">
           <div className="segmented" role="group" aria-label="Board size">
             {SIZES.map(n => (
-              <button key={n} aria-pressed={size === n} onClick={() => setSize(n)}>{n} × {n}</button>
+              <button key={n} aria-pressed={size === n} onClick={() => setRequest({ size: n, seed: null })}>{n} × {n}</button>
             ))}
           </div>
           <button className="icon-button" onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
@@ -413,10 +491,40 @@ export default function App() {
         )}
       </div>
 
-      <div className={`status-row${info?.solved && !busy ? ' is-solved' : ''}`}>
+      <div className={`status-row${info?.solved && !busy ? ' is-solved' : ''}`} ref={shareRef}>
         <p className="status" role="status">{puzzle ? status : ''}</p>
-        {puzzle && (
-          <span className="timer" aria-label={`Time ${formatTime(elapsed)}`}>{formatTime(elapsed)}</span>
+        <div className="status-meta">
+          <button className="code-button" onClick={() => { setShareOpen(o => !o); setShareError('') }}
+            aria-expanded={shareOpen} aria-label={code ? `Puzzle code ${code}. Share or open a code` : 'Open a puzzle code'}>
+            {code || 'Enter code'}
+          </button>
+          {puzzle && (
+            <span className="timer" aria-label={`Time ${formatTime(elapsed)}`}>{formatTime(elapsed)}</span>
+          )}
+        </div>
+
+        {shareOpen && (
+          <div className="share-panel" role="dialog" aria-label="Share or open a puzzle">
+            {link && (
+              <div className="share-block">
+                <p className="share-label">Anyone with this link gets the same puzzle.</p>
+                <div className="share-row">
+                  <input className="share-input" readOnly value={link} aria-label="Share link"
+                    onFocus={e => e.target.select()} />
+                  <button className="text-button is-primary" onClick={copyLink}>{copied ? 'Copied' : 'Copy link'}</button>
+                </div>
+              </div>
+            )}
+            <form className="share-block" onSubmit={openCode}>
+              <label className="share-label" htmlFor="code-input">Play a shared puzzle</label>
+              <div className="share-row">
+                <input id="code-input" className="share-input" value={codeInput} autoComplete="off" spellCheck={false}
+                  placeholder="1-10-3f2a91c0 or a link" onChange={e => { setCodeInput(e.target.value); setShareError('') }} />
+                <button className="text-button" type="submit" disabled={!codeInput.trim()}>Open</button>
+              </div>
+            </form>
+            {shareError && <p className="share-error" role="alert">{shareError}</p>}
+          </div>
         )}
       </div>
 

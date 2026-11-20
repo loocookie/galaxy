@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node test/board.test.mjs"
+    "test": "node test/board.test.mjs && node test/share.test.mjs"
   },
   "dependencies": {
     "react": "19.2.6",

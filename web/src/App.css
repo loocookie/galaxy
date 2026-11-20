@@ -140,6 +140,72 @@
 
 .status { margin: 0; }
 
+.status-row { position: relative; }
+
+.status-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.code-button {
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  transition: color 160ms ease;
+}
+.code-button:hover,
+.code-button[aria-expanded='true'] { color: var(--ink); }
+
+/* anchored to the code it opens from (top right), so it grows out of it */
+.share-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 5;
+  width: min(380px, 100%);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--board);
+  color: var(--ink);
+  border: 1.5px solid var(--ink);
+  border-radius: 16px;
+  font-size: 0.95rem;
+  font-weight: 400;
+  transform-origin: top right;
+  animation: panel-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes panel-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.share-block { display: flex; flex-direction: column; gap: 6px; }
+.share-label { margin: 0; color: var(--ink-soft); }
+.share-row { display: flex; gap: 8px; }
+
+.share-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 1.5px solid var(--ink-faint);
+  border-radius: 999px;
+  padding: 8px 14px;
+}
+.share-input:focus { border-color: var(--ink); outline: none; }
+.share-input::placeholder { color: var(--ink-soft); opacity: 0.7; }
+
+.share-error { margin: 0; color: var(--error); }
+
 .timer {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
