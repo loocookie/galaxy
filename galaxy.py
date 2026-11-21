@@ -552,11 +552,165 @@ class Solver:
             return total
         return rec(*self._initial())
 
-    def solve(self) -> SolveResult:
+    def solve_legacy(self) -> SolveResult:
+        """The first rating: whole rounds of singles, cost = squared distance to the block
+        as it was at the start of the round; trials pick the cheapest contradiction."""
         own, cand, queue, dirty = self._initial()
         steps: list[tuple[int, float]] = []
         st, cost, rounds, used = self._propagate(own, cand, queue, dirty, self.max_level, steps)
         return SolveResult(st, own, used, cost, rounds, steps)
+
+    # --- human-order rating (2026-11-21)
+    def _dist_map(self, own: list[int], k: int) -> list[int]:
+        """Grid distance from every cell to the nearest cell owned by dot k."""
+        nbrs = self.b.nbrs
+        dist = [-1] * self.b.N
+        frontier = [i for i, o in enumerate(own) if o == k]
+        for i in frontier:
+            dist[i] = 0
+        d = 0
+        while frontier:
+            d += 1
+            nxt = []
+            for x in frontier:
+                for y in nbrs[x]:
+                    if dist[y] < 0:
+                        dist[y] = d
+                        nxt.append(y)
+            frontier = nxt
+        return dist
+
+    def _trial_order(self, own, cand) -> list[tuple[int, int]]:
+        """Candidates (cell, dot) in the order a person would try them: cells with the fewest
+        candidates first, then the ones nearest that dot's block."""
+        mir, dmaps, out, seen = self.mir, {}, [], set()
+        for i in range(self.b.N):
+            if own[i] >= 0:
+                continue
+            x = cand[i]
+            n = x.bit_count()
+            while x:
+                low = x & -x
+                x ^= low
+                k = low.bit_length() - 1
+                m = mir[k][i]
+                key = (min(i, m), k)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if k not in dmaps:
+                    dmaps[k] = self._dist_map(own, k)
+                out.append((n, min(dmaps[k][i], dmaps[k][m]), i, k))
+        out.sort()
+        return [(i, k) for _, _, i, k in out]
+
+    def _find_trial(self, own, cand, level: int):
+        """The first trial, in human order, that leads to a contradiction using at most
+        `level` nested trials: (level used, tries, cell, dot), or None."""
+        order = self._trial_order(own, cand)
+        for lv in range(1, level + 1):
+            for tries, (i, k) in enumerate(order, 1):
+                m = self.mir[k][i]
+                o2, c2, q2 = own[:], cand[:], []
+                o2[i] = o2[m] = k
+                self._keep_only(c2, i, k, q2)
+                self._keep_only(c2, m, k, q2)
+                if self._settle(o2, c2, q2, set(), lv - 1)[0] == 'contra':
+                    return lv, tries, i, k
+        return None
+
+    def _assign_all(self, own, cand, queue) -> bool:
+        """Assign every single (and its mirror) at once. Raises _Contradiction."""
+        did = False
+        for i in range(self.b.N):
+            if own[i] >= 0 or cand[i] & (cand[i] - 1):
+                continue
+            k = cand[i].bit_length() - 1
+            m = self.mir[k][i]
+            if not cand[m] >> k & 1:
+                raise _Contradiction
+            own[i] = own[m] = k
+            self._keep_only(cand, i, k, queue)
+            self._keep_only(cand, m, k, queue)
+            did = True
+        return did
+
+    def _settle(self, own, cand, queue, dirty, level: int) -> tuple[str, int]:
+        """Propagate in whole rounds, with human-order trials up to `level`.
+        Returns (status, rounds): 'contra' | 'solved' | 'stuck'."""
+        rounds = 0
+        while True:
+            if not self._eliminate(cand, queue, dirty):
+                return 'contra', rounds
+            if all(o >= 0 for o in own):
+                return 'solved', rounds
+            try:
+                if self._assign_all(own, cand, queue):
+                    rounds += 1
+                    continue
+            except _Contradiction:
+                return 'contra', rounds
+            hit = self._find_trial(own, cand, level) if level > 0 else None
+            if hit is None:
+                return 'stuck', rounds
+            _, _, i, k = hit
+            cand[i] &= ~(1 << k)
+            queue.append((i, k))
+            dirty.add(k)
+            rounds += 1
+
+    def solve(self) -> SolveResult:
+        """Rate like a person: one cell at a time. Among the forced cells (one candidate
+        left), take the one nearest its dot's block; it costs distance / number of forced
+        pairs available (a lone, far deduction is hard to spot). When nothing is forced, try
+        candidates in human order and keep the first contradiction; it costs
+        trial_mult**level * tries. `rounds` counts deduction waves (whole rounds of singles)."""
+        N, C, mir = self.b.N, self.b.C, self.mir
+        own, cand, queue, dirty = self._initial()
+        rounds = self._settle(own[:], cand[:], queue[:], set(dirty), self.max_level)[1]
+        steps: list[tuple[int, float]] = []
+        cost, used, dmaps = 0.0, 0, {}
+        while True:
+            if not self._eliminate(cand, queue, dirty):
+                return SolveResult('contra', own, used, cost, rounds, steps)
+            if all(o >= 0 for o in own):
+                return SolveResult('solved', own, used, cost, rounds, steps)
+            pairs = {}
+            for i in range(N):
+                if own[i] < 0 and not cand[i] & (cand[i] - 1):
+                    k = cand[i].bit_length() - 1
+                    pairs.setdefault((min(i, mir[k][i]), k), i)
+            if pairs:
+                best = None
+                for (_, k), i in pairs.items():
+                    if k not in dmaps:
+                        dmaps[k] = self._dist_map(own, k)
+                    d = min(dmaps[k][i], dmaps[k][mir[k][i]])
+                    if best is None or d < best[0]:
+                        best = (d, i, k)
+                d, i, k = best
+                m = mir[k][i]
+                if not cand[m] >> k & 1:
+                    return SolveResult('contra', own, used, cost, rounds, steps)
+                own[i] = own[m] = k
+                self._keep_only(cand, i, k, queue)
+                self._keep_only(cand, m, k, queue)
+                dmaps.pop(k, None)
+                c = d / len(pairs)
+                cost += c
+                steps.append((0, c))
+                continue
+            hit = self._find_trial(own, cand, self.max_level)
+            if hit is None:
+                return SolveResult('stuck', own, used, cost, rounds, steps)
+            lv, tries, i, k = hit
+            cand[i] &= ~(1 << k)
+            queue.append((i, k))
+            dirty.add(k)
+            c = self.trial_mult ** lv * tries
+            cost += c
+            used = max(used, lv)
+            steps.append((lv, c))
 
 
 def solve(R: int, C: int, dots: list[Dot], **kw) -> SolveResult:
