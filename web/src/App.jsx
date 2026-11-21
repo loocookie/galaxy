@@ -157,10 +157,14 @@ function Board({ puzzle, walls, memo, info, hues, dark, tool, selected, busy, ce
       {!covered && memo.map((list, i) => {
         if (!list.length || info.display[i] >= 0) return null // a painted cell hides its marks
         const r = Math.floor(i / C), c = i % C
-        return memoLayout(list.length).map((p, t) => (
-          <circle key={`m${i}-${list[t]}`} className="memo" cx={c + p.x} cy={r + p.y} r={p.r}
-            fill={starColor(hues[list[t]], dark)} />
-        ))
+        // squares, so pencil marks never read as stars (which are circles)
+        return memoLayout(list.length).map((p, t) => {
+          const s = p.r * 1.8
+          return (
+            <rect key={`m${i}-${list[t]}`} className="memo" x={c + p.x - s / 2} y={r + p.y - s / 2}
+              width={s} height={s} rx={s * 0.12} fill={starColor(hues[list[t]], dark)} />
+          )
+        })
       })}
 
       <g style={{ stroke: 'var(--ink)' }} strokeWidth={1.25}>
