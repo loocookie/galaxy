@@ -259,6 +259,9 @@
 
 /* Reset asks once: armed, it turns to the error color until pressed again or 3 s pass */
 .text-button.is-armed { border-color: var(--error); color: var(--error); }
+.label-stack { display: inline-grid; }
+.label-stack > span { grid-area: 1 / 1; }
+.label-stack > span[aria-hidden='true'] { visibility: hidden; }
 
 .timer {
   font-variant-numeric: tabular-nums;

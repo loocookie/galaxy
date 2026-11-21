@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { analyze, assignHues, blockedWalls, emptyWalls, strokeEdges, dotAt } from './board.js'
+import { analyze, assignHues, blockedWalls, emptyWalls, wallAt, isWobble, dotAt } from './board.js'
 import { formatCode, parseCode, shareLink, codeError, MAX_SEED } from './share.js'
 import { encodeProgress, decodeProgress } from './progress.js'
 import './App.css'
@@ -458,11 +458,22 @@ export default function App() {
   const applyAt = (x, y) => {
     const d = drag.current
     if (d.kind === 'line') {
-      for (const w of strokeEdges(puzzle.R, puzzle.C, d.stroke, x, y, blocked)) {
-        const arr = d.work[w.t]
-        if (d.value === null) d.value = arr[w.idx] ? 0 : 1 // the first edge decides: draw or erase
-        if (arr[w.idx] !== d.value) { arr[w.idx] = d.value; d.changed = true }
+      const w = wallAt(puzzle.R, puzzle.C, x, y, blocked)
+      if (!w) return
+      const arr = d.work[w.t]
+      if (d.value === null) d.value = arr[w.idx] ? 0 : 1 // the first edge decides: draw or erase
+      const last = d.seq[d.seq.length - 1]
+      if (!last || last.t !== w.t || last.idx !== w.idx) {
+        d.seq.push(w)
+        // a perpendicular edge caught while going straight through a vertex goes back as it was
+        if (d.seq.length >= 3 && isWobble(puzzle.C, ...d.seq.slice(-3))) {
+          const E = d.seq[d.seq.length - 2]
+          const was = d.snap.walls[E.t][E.idx]
+          if (d.work[E.t][E.idx] !== was) { d.work[E.t][E.idx] = was; d.changed = true }
+          d.seq.splice(-2, 1)
+        }
       }
+      if (arr[w.idx] !== d.value) { arr[w.idx] = d.value; d.changed = true }
     } else if (d.kind === 'memo') {
       const i = cellAt(x, y)
       if (i < 0 || info.display[i] >= 0) return
@@ -510,7 +521,7 @@ export default function App() {
       drag.current = { kind: 'color', action, work: [...paint], snap, changed: false, last: [x, y] }
     } else {
       drag.current = {
-        kind: 'line', value: null, work: { v: [...walls.v], h: [...walls.h] }, stroke: {},
+        kind: 'line', value: null, work: { v: [...walls.v], h: [...walls.h] }, seq: [],
         snap, changed: false, last: [x, y],
       }
     }
@@ -722,7 +733,11 @@ export default function App() {
           <button className={`text-button${resetArmed ? ' is-armed' : ''}`} onClick={handleReset}
             disabled={!puzzle || busy || covered || solved}
             aria-label={resetArmed ? 'Press again to clear the board' : 'Reset'}>
-            {resetArmed ? 'Reset?' : 'Reset'}
+            {/* both labels share one grid cell, so the button keeps the wider one's width */}
+            <span className="label-stack">
+              <span aria-hidden={resetArmed}>Reset</span>
+              <span aria-hidden={!resetArmed}>Reset?</span>
+            </span>
           </button>
           <div className="new-wrap" ref={newRef}>
             <button className={`text-button${solved ? ' is-primary' : ''}`} aria-expanded={newOpen}

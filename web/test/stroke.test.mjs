@@ -1,5 +1,5 @@
-// Tests for strokeEdges and the progress codec. Run: npm test
-import { strokeEdges, wallAt } from '../src/board.js'
+// Tests for the wobble fix on line strokes and the progress codec. Run: npm test
+import { wallAt, isWobble } from '../src/board.js'
 import { encodeProgress, decodeProgress } from '../src/progress.js'
 import { parseCode, shareLink } from '../src/share.js'
 
@@ -8,31 +8,47 @@ const check = (cond, msg) => { if (!cond) { fails++; console.log('FAIL', msg) } 
 const R = 5, C = 5
 const key = (w) => `${w.t}${w.idx}`
 
-function drag(points, blocked = null) {
-  const s = {}, got = []
+// the same stroke logic as App.jsx: hit-test each sample, take back wobbles
+function drag(points) {
+  const walls = { v: Array(R * (C - 1)).fill(0), h: Array((R - 1) * C).fill(0) }
+  const seq = []
+  const at = (x, y) => {
+    const w = wallAt(R, C, x, y)
+    if (!w) return
+    const last = seq[seq.length - 1]
+    if (!last || key(last) !== key(w)) {
+      seq.push(w)
+      if (seq.length >= 3 && isWobble(C, ...seq.slice(-3))) {
+        const E = seq[seq.length - 2]
+        walls[E.t][E.idx] = 0
+        seq.splice(-2, 1)
+      }
+    }
+    walls[w.t][w.idx] = 1
+  }
   let [lx, ly] = points[0]
-  got.push(...strokeEdges(R, C, s, lx, ly, blocked))
+  at(lx, ly)
   for (const [x, y] of points.slice(1)) {
     const n = Math.max(1, Math.ceil(Math.hypot(x - lx, y - ly) / 0.08))
-    for (let i = 1; i <= n; i++) got.push(...strokeEdges(R, C, s, lx + ((x - lx) * i) / n, ly + ((y - ly) * i) / n, blocked))
+    for (let i = 1; i <= n; i++) at(lx + ((x - lx) * i) / n, ly + ((y - ly) * i) / n)
     ;[lx, ly] = [x, y]
   }
-  return [...new Set(got.map(key))].sort()
+  return [...walls.v.map((on, i) => (on ? 'v' + i : '')), ...walls.h.map((on, i) => (on ? 'h' + i : ''))].filter(Boolean).sort()
 }
 const hRow = (vy, x0, x1) => Array.from({ length: x1 - x0 }, (_, i) => `h${(vy - 1) * C + x0 + i}`).sort()
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 
-// a straight horizontal stroke along y=2 from x=0.5 to x=4.5
-check(JSON.stringify(drag([[0.5, 2], [4.6, 2]])) === JSON.stringify(hRow(2, 0, 5)), 'straight line')
-// the same stroke with a wobble across the vertex at (2,2): no vertical edge appears
-const wob = drag([[0.5, 2], [1.9, 2], [2.05, 2.4], [2.2, 1.95], [4.6, 2]])
-check(JSON.stringify(wob) === JSON.stringify(hRow(2, 0, 5)), `wobble ignored: ${wob}`)
-// a deliberate turn: right along y=2 to x=2, then down to y=4
-const turn = drag([[0.5, 2], [2, 2], [2, 4]])
-check(JSON.stringify(turn) === JSON.stringify(['h5', 'h6', 'v9', 'v13'].sort()), `turn: ${turn}`)
-// a tap is just the edge under the pointer
-check(JSON.stringify(drag([[1.5, 2]])) === JSON.stringify([key(wallAt(R, C, 1.5, 2))]), 'tap')
-// the frame is never a wall, but the stroke can run along it
-check(drag([[0, 0.2], [0, 4.8]]).length === 0, 'frame')
+check(same(drag([[0.5, 2], [4.5, 2]]), hRow(2, 0, 5)), 'straight line')
+const wob = drag([[0.5, 2], [1.9, 2], [2.05, 2.4], [2.2, 1.95], [4.5, 2]])
+check(same(wob, hRow(2, 0, 5)), `wobble taken back: ${wob}`)
+const wobUp = drag([[0.5, 2], [1.95, 2], [2.04, 1.6], [2.3, 2.02], [3.5, 2]])
+check(same(wobUp, hRow(2, 0, 4)), `upward wobble taken back: ${wobUp}`)
+// a real turn stays: right along y=2 to x=2, then down along x=2
+const turn = drag([[0.5, 2], [2, 2], [2, 4.5]])
+check(same(turn, ['h5', 'h6', 'v9', 'v13', 'v17'].sort()), `turn kept: ${turn}`)
+// dragging down through the middle of a column crosses stacked horizontal walls
+const stack = drag([[1.5, 0.5], [1.5, 4.5]])
+check(same(stack, ['h1', 'h6', 'h11', 'h16'].sort()), `stacked: ${stack}`)
 
 // progress codec
 const D = 9, N = 15
