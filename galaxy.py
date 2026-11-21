@@ -316,6 +316,8 @@ class SolveResult:
     score: float
     rounds: int           # number of deduction rounds (basic rounds + trial eliminations)
     steps: list[tuple[int, float]] = field(default_factory=list)  # (level, cost) per round
+    depths: list[int] = field(default_factory=list)  # per trial: chains followed to the
+                                                      # contradiction (-1 = nested trial)
 
     @property
     def difficulty(self) -> tuple[int, float]:
@@ -659,55 +661,99 @@ class Solver:
             dirty.add(k)
             rounds += 1
 
+    def _singles(self, own, cand) -> dict[tuple[int, int], int]:
+        """Forced pairs: (min(cell, mirror), dot) -> cell, for cells with one candidate left."""
+        mir, out = self.mir, {}
+        for i in range(self.b.N):
+            if own[i] < 0 and not cand[i] & (cand[i] - 1):
+                k = cand[i].bit_length() - 1
+                out.setdefault((min(i, mir[k][i]), k), i)
+        return out
+
+    def _walk(self, own, cand, queue, dirty, steps=None, after=()) -> tuple[str, int, float]:
+        """Basic deductions, chain by chain. Placing a cell (and its mirror) often forces a
+        cell right next to one of them: following that is free. When nothing next to the last
+        placement is forced, the next forced cell has to be found somewhere on the board: a new
+        chain, costing (distance to its dot's block) / (forced pairs available). `after`: cells
+        just placed (a trial), whose neighbours continue that placement. Returns
+        (status, chains, cost), status 'contra' | 'solved' | 'stuck'."""
+        nbrs, mir = self.b.nbrs, self.mir
+        chains, cost, fresh, dmaps = 0, 0.0, None, {}
+        while True:
+            if not self._eliminate(cand, queue, dirty):
+                return 'contra', chains, cost
+            if all(o >= 0 for o in own):
+                return 'solved', chains, cost
+            pairs = self._singles(own, cand)
+            if not pairs:
+                return 'stuck', chains, cost
+            if fresh is None:
+                near = {j for x in after for j in nbrs[x]} | set(after)
+                fresh = {p for p, j in pairs.items() if j in near or mir[p[1]][j] in near}
+            pool = {p: i for p, i in pairs.items() if p in fresh}
+            if not pool:
+                pool = pairs
+            best = None
+            for (_, k), i in pool.items():
+                if k not in dmaps:
+                    dmaps[k] = self._dist_map(own, k)
+                d = min(dmaps[k][i], dmaps[k][mir[k][i]])
+                if best is None or d < best[0]:
+                    best = (d, i, k)
+            d, i, k = best
+            if pool is pairs:
+                chains += 1
+                c = d / len(pairs)
+                cost += c
+                if steps is not None:
+                    steps.append((0, c))
+            m = mir[k][i]
+            if not cand[m] >> k & 1:
+                return 'contra', chains, cost
+            own[i] = own[m] = k
+            self._keep_only(cand, i, k, queue)
+            self._keep_only(cand, m, k, queue)
+            dmaps.pop(k, None)
+            if not self._eliminate(cand, queue, dirty):
+                return 'contra', chains, cost
+            near = set(nbrs[i]) | set(nbrs[m]) | {i, m}
+            fresh = {p for p, j in self._singles(own, cand).items()
+                     if p not in pairs and (j in near or mir[p[1]][j] in near)}
+
     def solve(self) -> SolveResult:
-        """Rate like a person: one cell at a time. Among the forced cells (one candidate
-        left), take the one nearest its dot's block; it costs distance / number of forced
-        pairs available (a lone, far deduction is hard to spot). When nothing is forced, try
-        candidates in human order and keep the first contradiction; it costs
-        trial_mult**level * tries. `rounds` counts deduction waves (whole rounds of singles)."""
-        N, C, mir = self.b.N, self.b.C, self.mir
+        """Rate like a person (2026-11-22). Basic deductions cost only where a chain has to be
+        started (see _walk). When nothing is forced, take the first candidate, in human order,
+        whose trial ends in a contradiction; its depth is the number of chains followed to get
+        there, and it costs 1 + depth. A trial that itself needs a trial has depth -1 and costs
+        trial_mult**level. `rounds` counts deduction waves (whole rounds of singles)."""
         own, cand, queue, dirty = self._initial()
         rounds = self._settle(own[:], cand[:], queue[:], set(dirty), self.max_level)[1]
         steps: list[tuple[int, float]] = []
-        cost, used, dmaps = 0.0, 0, {}
+        depths: list[int] = []
+        cost, used = 0.0, 0
         while True:
-            if not self._eliminate(cand, queue, dirty):
-                return SolveResult('contra', own, used, cost, rounds, steps)
-            if all(o >= 0 for o in own):
-                return SolveResult('solved', own, used, cost, rounds, steps)
-            pairs = {}
-            for i in range(N):
-                if own[i] < 0 and not cand[i] & (cand[i] - 1):
-                    k = cand[i].bit_length() - 1
-                    pairs.setdefault((min(i, mir[k][i]), k), i)
-            if pairs:
-                best = None
-                for (_, k), i in pairs.items():
-                    if k not in dmaps:
-                        dmaps[k] = self._dist_map(own, k)
-                    d = min(dmaps[k][i], dmaps[k][mir[k][i]])
-                    if best is None or d < best[0]:
-                        best = (d, i, k)
-                d, i, k = best
-                m = mir[k][i]
-                if not cand[m] >> k & 1:
-                    return SolveResult('contra', own, used, cost, rounds, steps)
-                own[i] = own[m] = k
-                self._keep_only(cand, i, k, queue)
-                self._keep_only(cand, m, k, queue)
-                dmaps.pop(k, None)
-                c = d / len(pairs)
-                cost += c
-                steps.append((0, c))
-                continue
+            st, _, c = self._walk(own, cand, queue, dirty, steps)
+            cost += c
+            if st != 'stuck':
+                return SolveResult(st, own, used, cost, rounds, steps, depths)
             hit = self._find_trial(own, cand, self.max_level)
             if hit is None:
-                return SolveResult('stuck', own, used, cost, rounds, steps)
-            lv, tries, i, k = hit
+                return SolveResult('stuck', own, used, cost, rounds, steps, depths)
+            lv, _, i, k = hit
+            m = self.mir[k][i]
+            if lv == 1:
+                o2, c2, q2 = own[:], cand[:], []
+                o2[i] = o2[m] = k
+                self._keep_only(c2, i, k, q2)
+                self._keep_only(c2, m, k, q2)
+                depth = self._walk(o2, c2, q2, set(), after=(i, m))[1]
+                c = 1 + depth
+            else:
+                depth, c = -1, self.trial_mult ** lv
+            depths.append(depth)
             cand[i] &= ~(1 << k)
             queue.append((i, k))
             dirty.add(k)
-            c = self.trial_mult ** lv * tries
             cost += c
             used = max(used, lv)
             steps.append((lv, c))
