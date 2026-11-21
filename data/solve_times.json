@@ -18,10 +18,15 @@
         "10E": 249,
         "10F": 191,
         "10G": 205,
-        "10H": 235
+        "10H": 235,
+        "15A": 1567,
+        "15B": 2213
       },
       "mistakes": [],
-      "notes": "Mistakes cost a lot of time, so some values may be outliers (2026-11-21)."
+      "notes": "Mistakes cost a lot of time, so some values may be outliers (2026-11-21). 15x15: 15A, 15B solved; gave up on 15C (2026-11-22).",
+      "gave_up": [
+        "15C"
+      ]
     },
     "friend1": {
       "times": {
