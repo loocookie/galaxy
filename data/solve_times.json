@@ -1,0 +1,15 @@
+{
+  "_note": "Solve times in seconds for the calibration puzzles in calib.json. Each solver is one person. 'mistakes' lists puzzles where the solver backtracked after a mistake, when known.",
+  "solvers": {
+    "owner": {
+      "times": {"7A": 41, "7B": 121, "7C": 21, "7D": 72, "7E": 102, "7F": 25, "7G": 189, "7H": 72},
+      "mistakes": [],
+      "notes": "Mistakes cost a lot of time, so some values may be outliers (2026-11-21)."
+    },
+    "friend1": {
+      "times": {"7A": 35, "7B": 66, "7C": 41, "7D": 63, "7E": 48, "7F": 25, "7G": 71, "7H": 78},
+      "mistakes": [],
+      "notes": "Given in order 7A-7H (2026-11-21)."
+    }
+  }
+}
