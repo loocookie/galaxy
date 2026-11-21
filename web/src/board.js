@@ -236,25 +236,7 @@ export function dotAt(dots, x, y, radius = 0.32) {
   return best
 }
 
-/** The two vertices [x, y] at the ends of wall `w`. */
-export function wallEnds(C, w) {
-  if (w.t === 'v') {
-    const x = w.idx % (C - 1) + 1, y = Math.floor(w.idx / (C - 1))
-    return [[x, y], [x, y + 1]]
-  }
-  const x = w.idx % C, y = Math.floor(w.idx / C) + 1
-  return [[x, y], [x + 1, y]]
-}
-
-/**
- * A stroke that runs straight through a vertex can catch a perpendicular edge there when the
- * pointer wobbles. In a stroke's sequence of edges P, E, N: if P and N lie on one line through
- * a vertex V and E is perpendicular and touches V, E was a wobble and gets taken back.
- */
-export function isWobble(C, P, E, N) {
-  if (P.t !== N.t || E.t === P.t) return false
-  const same = ([a, b], [c, d]) => a === c && b === d
-  const [p0, p1] = wallEnds(C, P), [n0, n1] = wallEnds(C, N), [e0, e1] = wallEnds(C, E)
-  const V = [p0, p1].find(v => same(v, n0) || same(v, n1))
-  return !!V && (same(V, e0) || same(V, e1))
-}
+// Hit range for a line drag after its first edge: closer to the line and farther from the
+// vertices than a tap (wallAt's defaults), so a corner or a wobble doesn't catch extra edges.
+export const STROKE_TOL = 0.2
+export const STROKE_ENDS = 0.3

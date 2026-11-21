@@ -1,5 +1,5 @@
-// Tests for the wobble fix on line strokes and the progress codec. Run: npm test
-import { wallAt, isWobble } from '../src/board.js'
+// Tests for the line-stroke hit range and the progress codec. Run: npm test
+import { wallAt, STROKE_TOL, STROKE_ENDS } from '../src/board.js'
 import { encodeProgress, decodeProgress } from '../src/progress.js'
 import { parseCode, shareLink } from '../src/share.js'
 
@@ -8,22 +8,14 @@ const check = (cond, msg) => { if (!cond) { fails++; console.log('FAIL', msg) } 
 const R = 5, C = 5
 const key = (w) => `${w.t}${w.idx}`
 
-// the same stroke logic as App.jsx: hit-test each sample, take back wobbles
+// the same stroke logic as App.jsx: the first edge with the tap's range, later ones narrower
 function drag(points) {
   const walls = { v: Array(R * (C - 1)).fill(0), h: Array((R - 1) * C).fill(0) }
   const seq = []
   const at = (x, y) => {
-    const w = wallAt(R, C, x, y)
+    const w = seq.length ? wallAt(R, C, x, y, null, STROKE_TOL, STROKE_ENDS) : wallAt(R, C, x, y)
     if (!w) return
-    const last = seq[seq.length - 1]
-    if (!last || key(last) !== key(w)) {
-      seq.push(w)
-      if (seq.length >= 3 && isWobble(C, ...seq.slice(-3))) {
-        const E = seq[seq.length - 2]
-        walls[E.t][E.idx] = 0
-        seq.splice(-2, 1)
-      }
-    }
+    seq.push(w)
     walls[w.t][w.idx] = 1
   }
   let [lx, ly] = points[0]
@@ -39,13 +31,20 @@ const hRow = (vy, x0, x1) => Array.from({ length: x1 - x0 }, (_, i) => `h${(vy -
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 
 check(same(drag([[0.5, 2], [4.5, 2]]), hRow(2, 0, 5)), 'straight line')
-const wob = drag([[0.5, 2], [1.9, 2], [2.05, 2.4], [2.2, 1.95], [4.5, 2]])
-check(same(wob, hRow(2, 0, 5)), `wobble taken back: ${wob}`)
-const wobUp = drag([[0.5, 2], [1.95, 2], [2.04, 1.6], [2.3, 2.02], [3.5, 2]])
-check(same(wobUp, hRow(2, 0, 4)), `upward wobble taken back: ${wobUp}`)
+// a wobble near a vertex (within STROKE_ENDS of it) catches no perpendicular edge
+const wob = drag([[0.5, 2], [1.9, 2], [2.05, 2.28], [2.2, 1.95], [4.5, 2]])
+check(same(wob, hRow(2, 0, 5)), `wobble ignored: ${wob}`)
+const wobUp = drag([[0.5, 2], [1.95, 2], [2.04, 1.72], [2.3, 2.02], [3.5, 2]])
+check(same(wobUp, hRow(2, 0, 4)), `upward wobble ignored: ${wobUp}`)
 // a real turn stays: right along y=2 to x=2, then down along x=2
 const turn = drag([[0.5, 2], [2, 2], [2, 4.5]])
 check(same(turn, ['h5', 'h6', 'v9', 'v13', 'v17'].sort()), `turn kept: ${turn}`)
+// a corner that overshoots the vertex a little doesn't catch the next edge along
+const over = drag([[0.5, 2], [2.27, 2], [2.1, 2.1], [2, 2.3], [2, 4.5]])
+check(same(over, ['h5', 'h6', 'v9', 'v13', 'v17'].sort()), `corner overshoot: ${over}`)
+// a straight drag a little off the line still takes every edge
+const off = drag([[0.5, 2.15], [4.5, 1.85]])
+check(same(off, hRow(2, 0, 5)), `slightly off the line: ${off}`)
 // dragging down through the middle of a column crosses stacked horizontal walls
 const stack = drag([[1.5, 0.5], [1.5, 4.5]])
 check(same(stack, ['h1', 'h6', 'h11', 'h16'].sort()), `stacked: ${stack}`)
