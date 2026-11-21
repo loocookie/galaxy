@@ -241,6 +241,25 @@
 
 .share-error { margin: 0; color: var(--error); }
 
+.share-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.share-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--ink); cursor: inherit; }
+.share-check.is-disabled { opacity: 0.45; cursor: default; }
+
+/* New puzzle opens a small menu: a random puzzle, or a shared code */
+.new-wrap { position: relative; display: flex; }
+.new-wrap > .text-button { flex: 1; }
+.new-panel { width: min(380px, calc(100vw - 32px)); text-align: left; }
+
+/* Reset asks once: armed, it turns to the error color until pressed again or 3 s pass */
+.text-button.is-armed { border-color: var(--error); color: var(--error); }
+
 .timer {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;

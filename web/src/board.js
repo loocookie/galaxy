@@ -235,3 +235,57 @@ export function dotAt(dots, x, y, radius = 0.32) {
   })
   return best
 }
+
+/**
+ * Line drags follow the lattice of vertices, so a wobble near a vertex can't add a stray
+ * perpendicular edge. A stroke starts on an edge (the one under the pointer, as with a tap) or
+ * at a vertex; from then on it only moves to a neighbouring vertex once the pointer is `step`
+ * past the current one along an axis (strictly, so a point halfway can't bounce), and each move takes the edge it crosses.
+ *
+ * `s` is the stroke's state ({} at the start), updated in place. Returns the walls to set.
+ */
+export function strokeEdges(R, C, s, x, y, blocked = null, step = 0.5) {
+  const out = []
+  if (!s.phase) {
+    const w = wallAt(R, C, x, y, blocked)
+    if (w) {
+      out.push(w)
+      s.phase = 'edge'
+      s.ends = w.t === 'v'
+        ? [[w.idx % (C - 1) + 1, Math.floor(w.idx / (C - 1))], [w.idx % (C - 1) + 1, Math.floor(w.idx / (C - 1)) + 1]]
+        : [[w.idx % C, Math.floor(w.idx / C) + 1], [w.idx % C + 1, Math.floor(w.idx / C) + 1]]
+      return out
+    }
+    const vx = Math.round(x), vy = Math.round(y)
+    if (vx < 0 || vx > C || vy < 0 || vy > R || Math.hypot(x - vx, y - vy) > 0.25) return out
+    s.phase = 'path'
+    s.at = [vx, vy]
+  }
+  if (s.phase === 'edge') {
+    // until the stroke leaves its first edge, it continues from whichever end is nearer
+    const [a, b] = s.ends
+    s.at = Math.hypot(x - a[0], y - a[1]) <= Math.hypot(x - b[0], y - b[1]) ? a : b
+  }
+  for (;;) {
+    const [ax, ay] = s.at
+    const dx = x - ax, dy = y - ay
+    if (Math.max(Math.abs(dx), Math.abs(dy)) <= step) break
+    const next = Math.abs(dx) >= Math.abs(dy) ? [ax + Math.sign(dx), ay] : [ax, ay + Math.sign(dy)]
+    if (next[0] < 0 || next[0] > C || next[1] < 0 || next[1] > R) break
+    const w = edgeBetween(R, C, s.at, next)
+    if (w && !(blocked && blocked[w.t].has(w.idx))) out.push(w)
+    s.at = next
+    s.phase = 'path'
+  }
+  return out
+}
+
+/** The interior wall between two neighbouring vertices, or null for the outer frame. */
+function edgeBetween(R, C, [ax, ay], [bx, by]) {
+  if (ax === bx) {
+    if (ax <= 0 || ax >= C) return null
+    return { t: 'v', idx: Math.min(ay, by) * (C - 1) + (ax - 1) }
+  }
+  if (ay <= 0 || ay >= R) return null
+  return { t: 'h', idx: (ay - 1) * C + Math.min(ax, bx) }
+}

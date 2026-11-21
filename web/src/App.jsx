@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { analyze, assignHues, blockedWalls, emptyWalls, wallAt, dotAt } from './board.js'
+import { analyze, assignHues, blockedWalls, emptyWalls, strokeEdges, dotAt } from './board.js'
 import { formatCode, parseCode, shareLink, codeError, MAX_SEED } from './share.js'
+import { encodeProgress, decodeProgress } from './progress.js'
 import './App.css'
 
 const SIZES = [7, 10, 15]
@@ -49,15 +50,18 @@ function requestPuzzle(n, seed = null) {
   })
 }
 
-// A shared link (?p=<code>) is read once at startup, then removed from the address bar so a
-// later refresh resumes the saved game instead of re-opening the link.
+// A shared link (?p=<code>, maybe &s=<progress>) is read once at startup, then removed from the
+// address bar so a later refresh resumes the saved game instead of re-opening the link.
 const LINK = (() => {
-  const p = new URLSearchParams(window.location.search).get('p')
+  const params = new URLSearchParams(window.location.search)
+  const p = params.get('p')
   if (p === null) return null
   const url = new URL(window.location.href)
   url.searchParams.delete('p')
+  url.searchParams.delete('s')
   window.history.replaceState(null, '', url)
-  return parseCode(p, codeOptions)
+  const parsed = parseCode(p, codeOptions)
+  return parsed.ok ? { ...parsed, state: params.get('s') } : parsed
 })()
 
 const hasProgress = (s) => !!s && (s.walls.v.some(Boolean) || s.walls.h.some(Boolean) ||
@@ -224,19 +228,29 @@ function Board({ puzzle, walls, memo, info, hues, dark, tool, selected, busy, ce
 export default function App() {
   const [theme, setTheme] = useState(() =>
     window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-  // which game to show: a size, plus a seed when opening a shared code (null = saved or random)
+  // which game to show: a size, plus a seed when opening a shared code (null = saved or random),
+  // plus shared progress to start from. `confirmed`: the player already agreed to lose progress.
   const [request, setRequest] = useState(() => {
-    if (LINK?.ok) return { size: LINK.size, seed: LINK.seed }
+    if (LINK?.ok) return { size: LINK.size, seed: LINK.seed, state: LINK.state }
     const n = Number(storage.get(LAST_SIZE_KEY))
     return { size: SIZES.includes(n) ? n : 10, seed: null }
   })
   const size = request.size
   const genToken = useRef(0) // only the latest generation request may apply its result
-  const [shareOpen, setShareOpen] = useState(() => !!LINK && !LINK.ok)
-  const [shareError, setShareError] = useState(() => (LINK && !LINK.ok ? codeError[LINK.reason] : ''))
-  const [codeInput, setCodeInput] = useState('')
+  const [shareOpen, setShareOpen] = useState(false)
+  const [shareError, setShareError] = useState('')
+  const [withProgress, setWithProgress] = useState(false)
+  const [snap, setSnap] = useState(null) // the progress a share link carries, taken when asked for
+  const [progressLink, setProgressLink] = useState('')
   const [copied, setCopied] = useState(false)
   const shareRef = useRef(null)
+  const [newOpen, setNewOpen] = useState(() => !!LINK && !LINK.ok)
+  const [newError, setNewError] = useState(() => (LINK && !LINK.ok ? codeError[LINK.reason] : ''))
+  const [codeInput, setCodeInput] = useState('')
+  const newRef = useRef(null)
+  const [notice, setNotice] = useState('')
+  const [resetArmed, setResetArmed] = useState(false) // Reset asks once: the first press arms it
+  const [dragging, setDragging] = useState(false)
   const [puzzle, setPuzzle] = useState(null)
   const [walls, setWalls] = useState(null)
   const [paint, setPaint] = useState(null)
@@ -276,17 +290,20 @@ export default function App() {
     () => (puzzle && walls && paint ? analyze(puzzle, walls, paint) : null),
     [puzzle, walls, paint])
 
+  // A stroke is judged when the finger lifts: passing through a solved board mid-drag doesn't
+  // count, and the rest of that stroke can't be cut off.
+  const solved = !!info?.solved && !dragging
+
   // Play the clear animation once, when an unsolved board becomes solved. Loading a solved
   // save, switching themes or re-rendering must not replay it.
   useEffect(() => {
-    const solved = !!info?.solved
     const prev = solvedRef.current
     solvedRef.current = { puzzle, solved }
     if (!solved || prev.puzzle !== puzzle || prev.solved) return
     setCelebrating(true)
     const t = setTimeout(() => setCelebrating(false), 1600)
     return () => clearTimeout(t)
-  }, [info, puzzle])
+  }, [solved, puzzle])
 
   const applyPuzzle = (pz, w, p, mm, el = 0) => {
     setStarted(false)
@@ -299,39 +316,61 @@ export default function App() {
     setSelected(-1)
   }
 
-  const generate = useCallback(async (n, seed = null) => {
+  // Start `pz` from shared progress, falling back to `base` (a save, or null for a fresh board).
+  const openShared = useCallback(async (pz, base, state, confirmed, token) => {
+    const st = await decodeProgress(state, { R: pz.R, C: pz.C, D: pz.dots.length })
+    if (token !== genToken.current) return
+    const n = pz.R * pz.C
+    const fallback = () => (base
+      ? applyPuzzle(pz, base.walls, base.paint, base.memo, base.elapsed)
+      : applyPuzzle(pz, emptyWalls(pz.R, pz.C), Array(n).fill(-1), emptyMemo(n)))
+    if (!st) { fallback(); setNotice(codeError.state); return }
+    const unfinished = base && hasProgress(base) && !analyze(pz, base.walls, base.paint).solved
+    if (unfinished && !confirmed &&
+      !window.confirm('This link carries someone’s progress. Opening it replaces yours on this puzzle.')) {
+      fallback()
+      return
+    }
+    applyPuzzle(pz, st.walls, st.paint, st.memo, st.elapsed)
+  }, [])
+
+  const generate = useCallback(async (n, seed = null, state = null) => {
     const token = ++genToken.current
     setBusy(true)
     setError('')
     try {
       const pz = await requestPuzzle(n, seed)
       if (token !== genToken.current) return // superseded by a newer request
-      applyPuzzle({ ...pz, v: GEN_VERSION }, emptyWalls(n, n), Array(n * n).fill(-1), emptyMemo(n * n))
+      const pzv = { ...pz, v: GEN_VERSION }
+      if (state) await openShared(pzv, null, state, true, token)
+      else applyPuzzle(pzv, emptyWalls(n, n), Array(n * n).fill(-1), emptyMemo(n * n))
       setWarm(true)
     } catch {
       if (token === genToken.current) setError("Couldn't generate a puzzle. Check your connection, then try again.")
     } finally {
       if (token === genToken.current) setBusy(false)
     }
-  }, [])
+  }, [openShared])
 
   // open the requested game: the saved one for this size (if it matches), or generate
   useEffect(() => {
-    const { size: n, seed } = request
+    const { size: n, seed, state = null, confirmed = false } = request
     storage.set(LAST_SIZE_KEY, String(n))
+    setNotice('')
     const saved = loadSave(n)
     const savedMatches = saved && (seed === null ||
       (saved.puzzle.seed === seed && (saved.puzzle.v ?? 1) === GEN_VERSION))
     if (savedMatches) {
-      genToken.current++ // drop any generation still in flight
+      const token = ++genToken.current // drop any generation still in flight
       setBusy(false)
-      applyPuzzle(saved.puzzle, saved.walls, saved.paint, saved.memo, saved.elapsed)
+      if (state && seed !== null) openShared(saved.puzzle, saved, state, confirmed, token)
+      else applyPuzzle(saved.puzzle, saved.walls, saved.paint, saved.memo, saved.elapsed)
     } else {
       setPuzzle(null)
-      generate(n, seed)
+      generate(n, seed, seed !== null ? state : null)
     }
     getWorker() // warm Pyodide up even when a saved game was restored
-  }, [request, generate])
+  }, [request, generate, openShared])
 
   // Timer: runs while an unsolved puzzle is on screen and the tab is visible.
   useEffect(() => {
@@ -342,8 +381,8 @@ export default function App() {
     document.addEventListener('visibilitychange', onVis)
     return () => document.removeEventListener('visibilitychange', onVis)
   }, [])
-  const covered = !!info && !info.solved && !started
-  const running = !!info && !info.solved && !busy && visible && started
+  const covered = !!info && !solved && !started
+  const running = !!info && !solved && !busy && visible && started
   useEffect(() => {
     if (!running) return
     let last = performance.now()
@@ -356,22 +395,34 @@ export default function App() {
     return () => clearInterval(id)
   }, [running])
 
+  // a solved board is final: no more drawing, undo or reset
   const handleUndo = useCallback(() => {
-    if (!history.length || covered) return
+    if (!history.length || covered || solved) return
     const prev = history[history.length - 1]
     setWalls(prev.walls)
     setPaint(prev.paint)
     setMemo(prev.memo)
     setHistory(history.slice(0, -1))
-  }, [history, covered])
+  }, [history, covered, solved])
 
   // From line mode, M (or the button) goes straight to pencilling; within color mode it toggles.
   const toggleMemo = useCallback(() => {
     if (mode === 'line') { setMode('color'); setMemoOn(true) } else setMemoOn(on => !on)
   }, [mode])
 
+  const progress = walls && paint && memo ? { walls, paint, memo } : null
+  const unfinished = !!puzzle && hasProgress(progress) && !solved
+
+  useEffect(() => {
+    if (!resetArmed) return
+    const t = setTimeout(() => setResetArmed(false), 3000)
+    return () => clearTimeout(t)
+  }, [resetArmed])
+
   const handleReset = () => {
-    if (!puzzle) return
+    if (!puzzle || solved) return
+    if (hasProgress(progress) && !resetArmed) { setResetArmed(true); return }
+    setResetArmed(false)
     setHistory(h => [...h.slice(-199), { walls, paint, memo }])
     setWalls(emptyWalls(puzzle.R, puzzle.C))
     setPaint(Array(puzzle.R * puzzle.C).fill(-1))
@@ -380,7 +431,7 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape') { setShareOpen(false); return }
+      if (e.key === 'Escape') { setShareOpen(false); setNewOpen(false); return }
       if (e.target instanceof HTMLInputElement) return // typing a code, not playing
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndo(); return }
       if (e.ctrlKey || e.metaKey || e.altKey) return
@@ -407,11 +458,11 @@ export default function App() {
   const applyAt = (x, y) => {
     const d = drag.current
     if (d.kind === 'line') {
-      const w = wallAt(puzzle.R, puzzle.C, x, y, blocked)
-      if (!w) return
-      const arr = d.work[w.t]
-      if (d.value === null) d.value = arr[w.idx] ? 0 : 1
-      if (arr[w.idx] !== d.value) { arr[w.idx] = d.value; d.changed = true }
+      for (const w of strokeEdges(puzzle.R, puzzle.C, d.stroke, x, y, blocked)) {
+        const arr = d.work[w.t]
+        if (d.value === null) d.value = arr[w.idx] ? 0 : 1 // the first edge decides: draw or erase
+        if (arr[w.idx] !== d.value) { arr[w.idx] = d.value; d.changed = true }
+      }
     } else if (d.kind === 'memo') {
       const i = cellAt(x, y)
       if (i < 0 || info.display[i] >= 0) return
@@ -435,7 +486,7 @@ export default function App() {
   }
 
   const onPointerDown = (e) => {
-    if (!info || info.solved || busy || covered) return
+    if (!info || solved || busy || covered) return
     const [x, y] = toCell(e)
     const snap = { walls, paint, memo }
     if (tool !== 'line') {
@@ -449,6 +500,7 @@ export default function App() {
         const action = memo[i].includes(selected) ? 'remove' : 'add'
         drag.current = { kind: 'memo', action, work: [...memo], snap, changed: false, last: [x, y] }
         e.currentTarget.setPointerCapture(e.pointerId)
+        setDragging(true)
         applyAt(x, y)
         flush()
         return
@@ -458,11 +510,12 @@ export default function App() {
       drag.current = { kind: 'color', action, work: [...paint], snap, changed: false, last: [x, y] }
     } else {
       drag.current = {
-        kind: 'line', value: null, work: { v: [...walls.v], h: [...walls.h] },
+        kind: 'line', value: null, work: { v: [...walls.v], h: [...walls.h] }, stroke: {},
         snap, changed: false, last: [x, y],
       }
     }
     e.currentTarget.setPointerCapture(e.pointerId)
+    setDragging(true)
     applyAt(x, y)
     flush()
   }
@@ -481,6 +534,7 @@ export default function App() {
   const onPointerUp = () => {
     const d = drag.current
     drag.current = null
+    setDragging(false)
     if (d?.changed) setHistory(h => [...h.slice(-199), d.snap])
   }
 
@@ -488,16 +542,40 @@ export default function App() {
   const code = puzzle && Number.isInteger(puzzle.seed) ? formatCode(puzzle.v ?? 1, puzzle.R, puzzle.seed) : ''
   const link = code ? shareLink(code) : ''
 
+  // panels close on a press anywhere outside them
   useEffect(() => {
-    if (!shareOpen) return
-    const onDown = (e) => { if (shareRef.current && !shareRef.current.contains(e.target)) setShareOpen(false) }
+    if (!shareOpen && !newOpen) return
+    const onDown = (e) => {
+      if (shareRef.current && !shareRef.current.contains(e.target)) setShareOpen(false)
+      if (newRef.current && !newRef.current.contains(e.target)) setNewOpen(false)
+    }
     document.addEventListener('pointerdown', onDown)
     return () => document.removeEventListener('pointerdown', onDown)
-  }, [shareOpen])
+  }, [shareOpen, newOpen])
+
+  // "Include my progress": the link carries the board and time as they were when asked for
+  const takeSnap = () => setSnap(progress ? { ...progress, elapsed } : null)
+  const snapHasProgress = !!snap && (hasProgress(snap) || snap.elapsed >= 1000)
+  useEffect(() => {
+    setProgressLink('')
+    if (!withProgress || !snapHasProgress || !puzzle || !code) return
+    let live = true
+    encodeProgress({ R: puzzle.R, C: puzzle.C, D: puzzle.dots.length, ...snap })
+      .then(s => { if (live) setProgressLink(shareLink(code, window.location, s)) })
+    return () => { live = false }
+  }, [withProgress, snap, snapHasProgress, puzzle, code])
+  const shownLink = withProgress && snapHasProgress ? progressLink : link
+
+  const toggleShare = () => {
+    if (!shareOpen) takeSnap()
+    setShareOpen(!shareOpen)
+    setShareError('')
+    setCopied(false)
+  }
 
   const copyLink = async () => {
     try {
-      await navigator.clipboard.writeText(link)
+      await navigator.clipboard.writeText(shownLink)
       setCopied(true)
       setTimeout(() => setCopied(false), 1600)
     } catch {
@@ -505,29 +583,38 @@ export default function App() {
     }
   }
 
+  const startRandom = () => {
+    setNewOpen(false)
+    generate(size)
+  }
+
   const openCode = (e) => {
     e.preventDefault()
     const p = parseCode(codeInput, codeOptions)
-    if (!p.ok) { setShareError(codeError[p.reason]); return }
+    if (!p.ok) { setNewError(codeError[p.reason]); return }
     const same = puzzle && puzzle.R === p.size && puzzle.seed === p.seed && (puzzle.v ?? 1) === p.version
-    if (!same) {
-      const saved = loadSave(p.size)
-      const unfinished = saved && hasProgress(saved) && !analyze(saved.puzzle, saved.walls, saved.paint).solved
-      const differs = saved && !(saved.puzzle.seed === p.seed && (saved.puzzle.v ?? 1) === p.version)
-      if (unfinished && differs &&
-        !window.confirm(`Opening this code replaces your unfinished ${p.size} \u00d7 ${p.size} puzzle.`)) return
-      setRequest({ size: p.size, seed: p.seed })
+    if (!same || p.state) {
+      // the same size replaces the board on screen, which the menu already warns about
+      if (p.size !== size) {
+        const saved = loadSave(p.size)
+        const savedUnfinished = saved && hasProgress(saved) && !analyze(saved.puzzle, saved.walls, saved.paint).solved
+        const differs = saved && !(saved.puzzle.seed === p.seed && (saved.puzzle.v ?? 1) === p.version)
+        if (savedUnfinished && (differs || p.state) &&
+          !window.confirm(`Opening this code replaces your unfinished ${p.size} \u00d7 ${p.size} puzzle.`)) return
+      }
+      setRequest({ size: p.size, seed: p.seed, state: p.state, confirmed: true })
     }
-    setShareError('')
+    setNewError('')
     setCodeInput('')
-    setShareOpen(false)
+    setNewOpen(false)
   }
 
   // ---------------------------------------------------------------- render
   let status = ''
   if (error) status = error
   else if (busy) status = warm ? `Generating a ${size} × ${size} puzzle…` : 'Preparing the puzzle generator. The first one takes a few seconds.'
-  else if (info?.solved) status = 'Solved.'
+  else if (solved) status = 'Solved.'
+  else if (notice) status = notice
 
   return (
     <main className="app">
@@ -570,38 +657,41 @@ export default function App() {
         )}
       </div>
 
-      <div className={`status-row${info?.solved && !busy ? ' is-solved' : ''}`} ref={shareRef}>
+      <div className={`status-row${solved && !busy ? ' is-solved' : ''}`} ref={shareRef}>
         <p className="status" role="status">{puzzle ? status : ''}</p>
         <div className="status-meta">
-          <button className="code-button" onClick={() => { setShareOpen(o => !o); setShareError('') }}
-            aria-expanded={shareOpen} aria-label={code ? `Puzzle code ${code}. Share or open a code` : 'Open a puzzle code'}>
-            {code || 'Enter code'}
-          </button>
+          {code && (
+            <button className="code-button" onClick={toggleShare}
+              aria-expanded={shareOpen} aria-label={`Puzzle code ${code}. Share this puzzle`}>
+              {code}
+            </button>
+          )}
           {puzzle && (
             <span className="timer" aria-label={`Time ${formatTime(elapsed)}`}>{formatTime(elapsed)}</span>
           )}
         </div>
 
-        {shareOpen && (
-          <div className="share-panel" role="dialog" aria-label="Share or open a puzzle">
-            {link && (
-              <div className="share-block">
-                <p className="share-label">Anyone with this link gets the same puzzle.</p>
-                <div className="share-row">
-                  <input className="share-input" readOnly value={link} aria-label="Share link"
-                    onFocus={e => e.target.select()} />
-                  <button className="text-button is-primary" onClick={copyLink}>{copied ? 'Copied' : 'Copy link'}</button>
-                </div>
-              </div>
-            )}
-            <form className="share-block" onSubmit={openCode}>
-              <label className="share-label" htmlFor="code-input">Play a shared puzzle</label>
+        {shareOpen && link && (
+          <div className="share-panel" role="dialog" aria-label="Share this puzzle">
+            <div className="share-block">
+              <p className="share-label">
+                {withProgress && snapHasProgress
+                  ? 'Anyone with this link picks up where you are, clock included.'
+                  : 'Anyone with this link gets the same puzzle.'}
+              </p>
               <div className="share-row">
-                <input id="code-input" className="share-input" value={codeInput} autoComplete="off" spellCheck={false}
-                  placeholder="2-10-3f2a91c0 or a link" onChange={e => { setCodeInput(e.target.value); setShareError('') }} />
-                <button className="text-button" type="submit" disabled={!codeInput.trim()}>Open</button>
+                <input className="share-input" readOnly value={shownLink} aria-label="Share link"
+                  onFocus={e => e.target.select()} />
+                <button className="text-button is-primary" onClick={copyLink} disabled={!shownLink}>
+                  {copied ? 'Copied' : 'Copy link'}
+                </button>
               </div>
-            </form>
+              <label className={`share-check${snapHasProgress ? '' : ' is-disabled'}`}>
+                <input type="checkbox" checked={withProgress && snapHasProgress} disabled={!snapHasProgress}
+                  onChange={e => { setWithProgress(e.target.checked); takeSnap(); setCopied(false) }} />
+                Include my progress{snapHasProgress ? ` at ${formatTime(snap.elapsed)}` : ''}
+              </label>
+            </div>
             {shareError && <p className="share-error" role="alert">{shareError}</p>}
           </div>
         )}
@@ -628,11 +718,37 @@ export default function App() {
           </button>
         </div>
         <div className="actions">
-          <button className="text-button" onClick={handleUndo} disabled={!history.length || covered}>Undo</button>
-          <button className="text-button" onClick={handleReset} disabled={!puzzle || busy || covered}>Reset</button>
-          <button className={`text-button${info?.solved ? ' is-primary' : ''}`} onClick={() => generate(size)} disabled={busy}>
-            New puzzle
+          <button className="text-button" onClick={handleUndo} disabled={!history.length || covered || solved}>Undo</button>
+          <button className={`text-button${resetArmed ? ' is-armed' : ''}`} onClick={handleReset}
+            disabled={!puzzle || busy || covered || solved}
+            aria-label={resetArmed ? 'Press again to clear the board' : 'Reset'}>
+            {resetArmed ? 'Reset?' : 'Reset'}
           </button>
+          <div className="new-wrap" ref={newRef}>
+            <button className={`text-button${solved ? ' is-primary' : ''}`} aria-expanded={newOpen}
+              onClick={() => { setNewOpen(o => !o); setNewError('') }}>
+              New puzzle
+            </button>
+            {newOpen && (
+              <div className="share-panel new-panel" role="dialog" aria-label="Start a new puzzle">
+                <div className="share-block">
+                  <button className="text-button is-primary" onClick={startRandom} disabled={busy}>
+                    Random {size} × {size} puzzle
+                  </button>
+                  {unfinished && <p className="share-label">This puzzle isn’t solved yet. Starting another one replaces it.</p>}
+                </div>
+                <form className="share-block" onSubmit={openCode}>
+                  <label className="share-label" htmlFor="code-input">Or play a shared code</label>
+                  <div className="share-row">
+                    <input id="code-input" className="share-input" value={codeInput} autoComplete="off" spellCheck={false}
+                      placeholder="2-10-3f2a91c0 or a link" onChange={e => { setCodeInput(e.target.value); setNewError('') }} />
+                    <button className="text-button" type="submit" disabled={!codeInput.trim()}>Open</button>
+                  </div>
+                </form>
+                {newError && <p className="share-error" role="alert">{newError}</p>}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
