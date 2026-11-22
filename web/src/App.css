@@ -47,6 +47,7 @@
   font-size: 0.95rem;
   font-weight: 500;
   letter-spacing: 0.01em;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -259,7 +260,9 @@
 .new-panel { width: min(380px, calc(100vw - 32px)); text-align: left; }
 
 /* Assists: a small menu under the header button */
-.settings-wrap { position: relative; display: flex; }
+/* the menu hangs from the right edge of the header controls, so it stays on screen on phones */
+.header-controls { position: relative; }
+.settings-wrap { display: flex; }
 .settings-panel { width: min(340px, calc(100vw - 32px)); text-align: left; }
 .assist-option { align-items: flex-start; margin-top: 0; }
 .assist-option input { margin-top: 3px; flex: none; }
@@ -363,6 +366,14 @@ kbd {
 
 /* Phones: every row spans the board's width so the column reads as one block. */
 @media (max-width: 480px) {
+  .header-controls { gap: 8px; }
+  .header .segmented button { padding: 6px 10px; }
+  .header .icon-button { width: 36px; height: 36px; }
+}
+@media (max-width: 360px) {
+  .header .segmented button { padding: 6px 8px; font-size: 0.88rem; }
+  .header-controls { gap: 6px; }
+  .actions .text-button { white-space: nowrap; padding: 10px 4px; font-size: 0.9rem; }
   .toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
   .tool-group .segmented { display: flex; flex: 1; }
   .memo-toggle { padding: 10px 14px; }
