@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { analyze, assignHues, blockedWalls, emptyWalls, wallAt, STROKE_TOL, STROKE_ENDS, dotAt, mirror } from './board.js'
-import { coreOwner, withCores, spreadWalls, wallsAround, autoCandidates } from './assist.js'
+import { coreOwner, withCores, spreadWalls, wallsAround, autoCandidates, frameTwins, mirrorFrame } from './assist.js'
 import { formatCode, parseCode, shareLink, codeError, MAX_SEED } from './share.js'
 import { encodeProgress, decodeProgress } from './progress.js'
 import './App.css'
@@ -312,6 +312,14 @@ export default function App() {
   const info = useMemo(
     () => (puzzle && walls && shownPaint ? analyze(puzzle, walls, shownPaint) : null),
     [puzzle, walls, shownPaint])
+  // With auto-mirror on, a fresh board already has walls: the frame mirrored about the star
+  // cells on it. Those alone are not progress.
+  const baseWalls = useMemo(() => {
+    if (!assist.mirror || !puzzle) return null
+    const w = emptyWalls(puzzle.R, puzzle.C)
+    mirrorFrame(puzzle.R, puzzle.C, puzzle.dots, w, j => coreOwn[j], blocked)
+    return w
+  }, [assist.mirror, puzzle, coreOwn, blocked])
   const cands = useMemo(
     () => (assist.cands && info ? autoCandidates(puzzle.R, puzzle.C, puzzle.dots, walls, info.display) : null),
     [assist.cands, info, puzzle, walls])
@@ -443,7 +451,25 @@ export default function App() {
   }, [mode])
 
   const progress = walls && paint && memo && candOff ? { walls, paint, memo, candOff } : null
-  const unfinished = !!puzzle && hasProgress(progress) && !solved
+  // progress beyond what auto-mirror draws on a fresh board by itself
+  const progressed = !!progress && hasProgress(baseWalls ? {
+    ...progress,
+    walls: { v: walls.v.map((x, i) => x !== baseWalls.v[i]), h: walls.h.map((x, i) => x !== baseWalls.h[i]) },
+  } : progress)
+  const unfinished = !!puzzle && progressed && !solved
+
+  // Turning auto-mirror on (or opening a puzzle with it on) mirrors the frame at once: every
+  // colored cell on the frame gives a wall inside the board, cascading from there.
+  const prevMirror = useRef(assist.mirror)
+  useEffect(() => {
+    const turnedOn = assist.mirror && !prevMirror.current
+    prevMirror.current = assist.mirror
+    if (!assist.mirror || !puzzle || !walls || !info || solved) return
+    const w = { v: [...walls.v], h: [...walls.h] }
+    if (!mirrorFrame(puzzle.R, puzzle.C, puzzle.dots, w, j => info.display[j], blocked)) return
+    if (turnedOn) setHistory(h => [...h.slice(-199), { walls, paint, memo, candOff }])
+    setWalls(w)
+  }, [assist.mirror, puzzle]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!resetArmed) return
@@ -453,10 +479,10 @@ export default function App() {
 
   const handleReset = () => {
     if (!puzzle || solved) return
-    if (hasProgress(progress) && !resetArmed) { setResetArmed(true); return }
+    if (progressed && !resetArmed) { setResetArmed(true); return }
     setResetArmed(false)
     setHistory(h => [...h.slice(-199), { walls, paint, memo, candOff }])
-    setWalls(emptyWalls(puzzle.R, puzzle.C))
+    setWalls(baseWalls ? { v: [...baseWalls.v], h: [...baseWalls.h] } : emptyWalls(puzzle.R, puzzle.C))
     setPaint(Array(puzzle.R * puzzle.C).fill(-1))
     setMemo(emptyMemo(puzzle.R * puzzle.C))
     setCandOff(emptyMemo(puzzle.R * puzzle.C))
@@ -542,7 +568,8 @@ export default function App() {
           // paint the mirror cell too, then mirror the walls already drawn around both
           const m = mirror(R, C, i, dots[selected])
           if (m >= 0 && colorAt(d, m) < 0) d.work[m] = selected
-          const seeds = [i, m].filter(j => j >= 0).flatMap(j => wallsAround(R, C, d.walls, j))
+          const seeds = [i, m].filter(j => j >= 0).flatMap(j => [
+            ...wallsAround(R, C, d.walls, j), ...frameTwins(R, C, dots, j, selected, blocked)])
           if (spreadWalls(R, C, dots, d.walls, j => colorAt(d, j), seeds, 1, blocked)) d.wallsChanged = true
         }
       }

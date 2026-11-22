@@ -77,6 +77,43 @@ export function spreadWalls(R, C, dots, walls, colorAt, seeds, value, blocked) {
 }
 
 /**
+ * The board's frame is a wall too. Cell i, colored k, on the frame: the frame edge mirrored
+ * about dot k is a wall inside the board (between the mirror cell and its neighbour on the
+ * mirrored side), unless that lands on the frame again or through a dot. Returns those walls.
+ */
+export function frameTwins(R, C, dots, i, k, blocked) {
+  const r = Math.floor(i / C), c = i % C
+  const m = mirror(R, C, i, dots[k])
+  if (m < 0) return []
+  const mr = Math.floor(m / C), mc = m % C, out = []
+  // outward directions of i; the mirrored edge of m faces the opposite way
+  const dirs = []
+  if (r === 0) dirs.push([-1, 0])
+  if (r === R - 1) dirs.push([1, 0])
+  if (c === 0) dirs.push([0, -1])
+  if (c === C - 1) dirs.push([0, 1])
+  for (const [dr, dc] of dirs) {
+    const nr = mr - dr, nc = mc - dc
+    if (nr < 0 || nr >= R || nc < 0 || nc >= C) continue
+    const w = wallBetween(R, C, m, nr * C + nc)
+    if (w && !blocked[w.t].has(w.idx)) out.push(w)
+  }
+  return out
+}
+
+/** Frame twins of every colored cell on the frame, spread like any wall. Mutates `walls`. */
+export function mirrorFrame(R, C, dots, walls, colorAt, blocked) {
+  const seeds = []
+  for (let i = 0; i < R * C; i++) {
+    const r = Math.floor(i / C), c = i % C
+    if (r > 0 && r < R - 1 && c > 0 && c < C - 1) continue
+    const k = colorAt(i)
+    if (k >= 0) seeds.push(...frameTwins(R, C, dots, i, k, blocked))
+  }
+  return spreadWalls(R, C, dots, walls, colorAt, seeds, 1, blocked)
+}
+
+/**
  * Auto candidates: for each cell that isn't colored yet, the dots it could still belong to
  * going by the player's marks: its mirror about the dot is on the board, and both it and the
  * mirror can reach the dot's core without crossing a wall or a cell of another color.

@@ -16,7 +16,7 @@ function solutionWalls(R, C, owner) {
 const allWalls = (w) => [...w.v.map((on, idx) => ({ t: 'v', idx, on })), ...w.h.map((on, idx) => ({ t: 'h', idx, on }))]
 const count = (w) => w.v.reduce((a, b) => a + b, 0) + w.h.reduce((a, b) => a + b, 0)
 
-let cascades = 0
+let cascades = 0, framed = 0
 for (const [n, pz] of puzzles.entries()) {
   const { R, C, owner, dots } = pz, N = R * C
   const blocked = B.blockedWalls(R, C, dots)
@@ -54,6 +54,15 @@ for (const [n, pz] of puzzles.entries()) {
   A.spreadWalls(R, C, dots, w3, () => -1, [first], 1, blocked)
   check(count(w3) === 1, `#${n} uncolored wall stays single`)
 
+  // 3b. the frame mirrored about colored frame cells gives only solution walls
+  const wf = B.emptyWalls(R, C)
+  A.mirrorFrame(R, C, dots, wf, truth, blocked)
+  check(allWalls(wf).every(x => !x.on || sol[x.t][x.idx]), `#${n} frame twins (full paint) are solution walls`)
+  const wc = B.emptyWalls(R, C)
+  A.mirrorFrame(R, C, dots, wc, j => co[j], blocked)
+  check(allWalls(wc).every(x => !x.on || sol[x.t][x.idx]), `#${n} frame twins (star cells only) are solution walls`)
+  if (count(wc) > 0) framed++
+
   // 4. auto candidates always keep the answer: empty board, half painted right, region 0 enclosed
   const none = Array(N).fill(-1)
   const keeps = (walls, paint) => {
@@ -75,5 +84,7 @@ for (const [n, pz] of puzzles.entries()) {
   check(solved.every(l => l.length === 0), `#${n} solved board has no candidates`)
 }
 check(cascades > 0, 'some walls cascade past their first twin')
+check(framed > 0, "star cells on the frame give walls on a fresh board")
+console.log(`frame: ${framed} of ${puzzles.length} fresh boards get walls`)
 console.log(fails ? `assist: ${fails} failures` : `assist: all checks passed (${cascades} cascading walls)`)
 if (fails) process.exit(1)
