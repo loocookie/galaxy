@@ -81,7 +81,8 @@
   display: block;
   width: 100%;
   height: auto;
-  touch-action: none;
+  /* one finger draws; two fingers still pinch-zoom the page (the stroke is then dropped) */
+  touch-action: pinch-zoom;
   user-select: none;
   -webkit-user-select: none;
   /* mobile browsers flash the whole tappable SVG; the board's own feedback is enough */
@@ -256,6 +257,14 @@
 .new-wrap { position: relative; display: flex; }
 .new-wrap > .text-button { flex: 1; }
 .new-panel { width: min(380px, calc(100vw - 32px)); text-align: left; }
+
+/* Assists: a small menu under the header button */
+.settings-wrap { position: relative; display: flex; }
+.settings-panel { width: min(340px, calc(100vw - 32px)); text-align: left; }
+.assist-option { align-items: flex-start; margin-top: 0; }
+.assist-option input { margin-top: 3px; flex: none; }
+.assist-option > span { display: flex; flex-direction: column; gap: 2px; }
+.assist-option strong { font-weight: 600; }
 
 /* Reset asks once: armed, it turns to the error color until pressed again or 3 s pass */
 .text-button.is-armed { border-color: var(--error); color: var(--error); }

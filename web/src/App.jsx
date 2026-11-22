@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
-import { analyze, assignHues, blockedWalls, emptyWalls, wallAt, STROKE_TOL, STROKE_ENDS, dotAt } from './board.js'
+import { analyze, assignHues, blockedWalls, emptyWalls, wallAt, STROKE_TOL, STROKE_ENDS, dotAt, mirror } from './board.js'
+import { coreOwner, withCores, spreadWalls, wallsAround, autoCandidates } from './assist.js'
 import { formatCode, parseCode, shareLink, codeError, MAX_SEED } from './share.js'
 import { encodeProgress, decodeProgress } from './progress.js'
 import './App.css'
@@ -9,6 +10,7 @@ const MARGIN = 0.45 // room around the board for the chart's tick frame, in cell
 const WALL_WIDTH = 3.5 // px, player walls and the outer frame
 const saveKey = (n) => `galaxy_${n}x${n}`
 const LAST_SIZE_KEY = 'galaxy_last_size'
+const ASSIST_KEY = 'galaxy_assist'
 /* global __GEN_VERSION__ */
 const GEN_VERSION = __GEN_VERSION__ // GENERATOR_VERSION from galaxy.py, injected by vite.config.js
 const codeOptions = { version: GEN_VERSION, sizes: SIZES }
@@ -65,15 +67,24 @@ const LINK = (() => {
 })()
 
 const hasProgress = (s) => !!s && (s.walls.v.some(Boolean) || s.walls.h.some(Boolean) ||
-  s.paint.some(k => k >= 0) || !!s.memo?.some(l => l.length))
+  s.paint.some(k => k >= 0) || !!s.memo?.some(l => l.length) || !!s.candOff?.some(l => l.length))
 const emptyMemo = (n) => Array.from({ length: n }, () => [])
+const cellList = (a, n) => (Array.isArray(a) && a.length === n ? a : emptyMemo(n)) // per-cell lists, older saves lack them
+// solved, whatever the assist settings: a dot's core cells are always its color
+const isSolved = (pz, walls, paint) => analyze(pz, walls, withCores(paint, coreOwner(pz.R, pz.C, pz.dots))).solved
+
+function loadAssist() {
+  try {
+    const a = JSON.parse(storage.get(ASSIST_KEY))
+    return { mirror: !!a?.mirror, cands: !!a?.cands }
+  } catch { return { mirror: false, cands: false } }
+}
 
 function loadSave(n) {
   try {
     const s = JSON.parse(storage.get(saveKey(n)))
     if (s?.puzzle?.R === n && s.puzzle.C === n && s.walls && s.paint) {
-      const memo = Array.isArray(s.memo) && s.memo.length === n * n ? s.memo : emptyMemo(n * n) // older saves
-      return { ...s, memo, elapsed: Number.isFinite(s.elapsed) && s.elapsed > 0 ? s.elapsed : 0 }
+      return { ...s, memo: cellList(s.memo, n * n), candOff: cellList(s.candOff, n * n), elapsed: Number.isFinite(s.elapsed) && s.elapsed > 0 ? s.elapsed : 0 }
     }
   } catch { /* corrupt save */ }
   return null
@@ -255,6 +266,10 @@ export default function App() {
   const [walls, setWalls] = useState(null)
   const [paint, setPaint] = useState(null)
   const [memo, setMemo] = useState(null) // per cell, the star indices pencilled in, oldest first
+  const [candOff, setCandOff] = useState(null) // per cell, auto candidates the player crossed out
+  const [assist, setAssist] = useState(loadAssist) // { mirror, cands }
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsRef = useRef(null)
   const [mode, setMode] = useState('line') // 'line' | 'color'
   const [memoOn, setMemoOn] = useState(false) // within color mode: pencil marks instead of paint
   const tool = mode === 'color' && memoOn ? 'memo' : mode
@@ -272,23 +287,38 @@ export default function App() {
   const [started, setStarted] = useState(false)
   const svgRef = useRef(null)
   const drag = useRef(null)
+  const pointers = useRef(new Set()) // fingers on the board; a second one means a pinch, not a stroke
   const dark = theme === 'dark'
+
+  useEffect(() => { storage.set(ASSIST_KEY, JSON.stringify(assist)) }, [assist])
 
   useEffect(() => { document.documentElement.dataset.theme = theme }, [theme])
 
   // saved once per second of play at most (elapsedSec), and on every move
   const elapsedSec = Math.floor(elapsed / 1000)
   useEffect(() => {
-    if (puzzle && walls && paint && memo) {
-      storage.set(saveKey(puzzle.R), JSON.stringify({ puzzle, walls, paint, memo, elapsed: elapsedSec * 1000 }))
+    if (puzzle && walls && paint && memo && candOff) {
+      storage.set(saveKey(puzzle.R), JSON.stringify({ puzzle, walls, paint, memo, candOff, elapsed: elapsedSec * 1000 }))
     }
-  }, [puzzle, walls, paint, memo, elapsedSec])
+  }, [puzzle, walls, paint, memo, candOff, elapsedSec])
 
   const hues = useMemo(() => (puzzle ? assignHues(puzzle.dots) : []), [puzzle])
   const blocked = useMemo(() => (puzzle ? blockedWalls(puzzle.R, puzzle.C, puzzle.dots) : null), [puzzle])
+  const coreOwn = useMemo(() => (puzzle ? coreOwner(puzzle.R, puzzle.C, puzzle.dots) : null), [puzzle])
+  // with auto-mirror on, every dot's core cells show its color (derived, never stored)
+  const shownPaint = useMemo(
+    () => (paint && coreOwn ? (assist.mirror ? withCores(paint, coreOwn) : paint) : null),
+    [paint, coreOwn, assist.mirror])
   const info = useMemo(
-    () => (puzzle && walls && paint ? analyze(puzzle, walls, paint) : null),
-    [puzzle, walls, paint])
+    () => (puzzle && walls && shownPaint ? analyze(puzzle, walls, shownPaint) : null),
+    [puzzle, walls, shownPaint])
+  const cands = useMemo(
+    () => (assist.cands && info ? autoCandidates(puzzle.R, puzzle.C, puzzle.dots, walls, info.display) : null),
+    [assist.cands, info, puzzle, walls])
+  // pencil marks on screen: the player's own, or with auto candidates on, the candidates left
+  const shownMemo = useMemo(
+    () => (cands && candOff ? cands.map((l, i) => l.filter(k => !candOff[i].includes(k))) : memo),
+    [cands, candOff, memo])
 
   // A stroke is judged when the finger lifts: passing through a solved board mid-drag doesn't
   // count, and the rest of that stroke can't be cut off.
@@ -305,13 +335,14 @@ export default function App() {
     return () => clearTimeout(t)
   }, [solved, puzzle])
 
-  const applyPuzzle = (pz, w, p, mm, el = 0) => {
+  const applyPuzzle = (pz, w, p, mm, el = 0, off = null) => {
     setStarted(false)
     setElapsed(el)
     setPuzzle(pz)
     setWalls(w)
     setPaint(p)
     setMemo(mm)
+    setCandOff(off ?? emptyMemo(pz.R * pz.C))
     setHistory([])
     setSelected(-1)
   }
@@ -322,10 +353,10 @@ export default function App() {
     if (token !== genToken.current) return
     const n = pz.R * pz.C
     const fallback = () => (base
-      ? applyPuzzle(pz, base.walls, base.paint, base.memo, base.elapsed)
+      ? applyPuzzle(pz, base.walls, base.paint, base.memo, base.elapsed, base.candOff)
       : applyPuzzle(pz, emptyWalls(pz.R, pz.C), Array(n).fill(-1), emptyMemo(n)))
     if (!st) { fallback(); setNotice(codeError.state); return }
-    const unfinished = base && hasProgress(base) && !analyze(pz, base.walls, base.paint).solved
+    const unfinished = base && hasProgress(base) && !isSolved(pz, base.walls, base.paint)
     if (unfinished && !confirmed &&
       !window.confirm('This link carries someone’s progress. Opening it replaces yours on this puzzle.')) {
       fallback()
@@ -364,7 +395,7 @@ export default function App() {
       const token = ++genToken.current // drop any generation still in flight
       setBusy(false)
       if (state && seed !== null) openShared(saved.puzzle, saved, state, confirmed, token)
-      else applyPuzzle(saved.puzzle, saved.walls, saved.paint, saved.memo, saved.elapsed)
+      else applyPuzzle(saved.puzzle, saved.walls, saved.paint, saved.memo, saved.elapsed, saved.candOff)
     } else {
       setPuzzle(null)
       generate(n, seed, seed !== null ? state : null)
@@ -402,6 +433,7 @@ export default function App() {
     setWalls(prev.walls)
     setPaint(prev.paint)
     setMemo(prev.memo)
+    setCandOff(prev.candOff)
     setHistory(history.slice(0, -1))
   }, [history, covered, solved])
 
@@ -410,7 +442,7 @@ export default function App() {
     if (mode === 'line') { setMode('color'); setMemoOn(true) } else setMemoOn(on => !on)
   }, [mode])
 
-  const progress = walls && paint && memo ? { walls, paint, memo } : null
+  const progress = walls && paint && memo && candOff ? { walls, paint, memo, candOff } : null
   const unfinished = !!puzzle && hasProgress(progress) && !solved
 
   useEffect(() => {
@@ -423,15 +455,16 @@ export default function App() {
     if (!puzzle || solved) return
     if (hasProgress(progress) && !resetArmed) { setResetArmed(true); return }
     setResetArmed(false)
-    setHistory(h => [...h.slice(-199), { walls, paint, memo }])
+    setHistory(h => [...h.slice(-199), { walls, paint, memo, candOff }])
     setWalls(emptyWalls(puzzle.R, puzzle.C))
     setPaint(Array(puzzle.R * puzzle.C).fill(-1))
     setMemo(emptyMemo(puzzle.R * puzzle.C))
+    setCandOff(emptyMemo(puzzle.R * puzzle.C))
   }
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape') { setShareOpen(false); setNewOpen(false); return }
+      if (e.key === 'Escape') { setShareOpen(false); setNewOpen(false); setSettingsOpen(false); return }
       if (e.target instanceof HTMLInputElement) return // typing a code, not playing
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndo(); return }
       if (e.ctrlKey || e.metaKey || e.altKey) return
@@ -455,43 +488,96 @@ export default function App() {
     return r >= 0 && r < puzzle.R && c >= 0 && c < puzzle.C ? r * puzzle.C + c : -1
   }
 
+  // the color a cell shows while a stroke is under way (paint from the stroke's own copy)
+  const colorAt = (d, j) => {
+    if (assist.mirror && coreOwn[j] >= 0) return coreOwn[j]
+    if (info.auto[j] >= 0) return info.auto[j]
+    return d.kind === 'color' ? d.work[j] : info.display[j]
+  }
+
   const applyAt = (x, y) => {
     const d = drag.current
+    const { R, C, dots } = puzzle
     if (d.kind === 'line') {
       // the first edge uses the tap's hit range; later ones need the pointer nearer the middle
       const w = d.value !== null
-        ? wallAt(puzzle.R, puzzle.C, x, y, blocked, STROKE_TOL, STROKE_ENDS)
-        : wallAt(puzzle.R, puzzle.C, x, y, blocked)
+        ? wallAt(R, C, x, y, blocked, STROKE_TOL, STROKE_ENDS)
+        : wallAt(R, C, x, y, blocked)
       if (!w) return
       const arr = d.work[w.t]
       if (d.value === null) d.value = arr[w.idx] ? 0 : 1 // the first edge decides: draw or erase
-      if (arr[w.idx] !== d.value) { arr[w.idx] = d.value; d.changed = true }
+      if (assist.mirror) {
+        // drawing or erasing a wall does the same to its mirror images about the colors it borders
+        if (spreadWalls(R, C, dots, d.work, j => colorAt(d, j), [w], d.value, blocked)) d.changed = true
+      } else if (arr[w.idx] !== d.value) { arr[w.idx] = d.value; d.changed = true }
     } else if (d.kind === 'memo') {
       const i = cellAt(x, y)
       if (i < 0 || info.display[i] >= 0) return
       const list = d.work[i], has = list.includes(selected)
       if (d.action === 'add' && !has) { d.work[i] = [...list, selected]; d.changed = true }
       if (d.action === 'remove' && has) { d.work[i] = list.filter(k => k !== selected); d.changed = true }
+    } else if (d.kind === 'cand') {
+      // crossing out an auto candidate, or bringing a crossed-out one back
+      const i = cellAt(x, y)
+      if (i < 0 || info.display[i] >= 0 || !cands[i].includes(selected)) return
+      const list = d.work[i], off = list.includes(selected)
+      if (d.action === 'remove' && !off) { d.work[i] = [...list, selected]; d.changed = true }
+      if (d.action === 'add' && off) { d.work[i] = list.filter(k => k !== selected); d.changed = true }
     } else {
       const i = cellAt(x, y)
       if (i < 0) return
-      if (d.action === 'erase' && d.work[i] >= 0) { d.work[i] = -1; d.changed = true }
-      if (d.action === 'paint' && d.work[i] < 0) { d.work[i] = selected; d.changed = true }
+      if (d.action === 'erase' && d.work[i] >= 0) {
+        const k = d.work[i]
+        d.work[i] = -1
+        d.changed = true
+        if (assist.mirror) {
+          const m = mirror(R, C, i, dots[k])
+          if (m >= 0 && d.work[m] === k) d.work[m] = -1
+        }
+      }
+      if (d.action === 'paint' && d.work[i] < 0) {
+        d.work[i] = selected
+        d.changed = true
+        if (assist.mirror) {
+          // paint the mirror cell too, then mirror the walls already drawn around both
+          const m = mirror(R, C, i, dots[selected])
+          if (m >= 0 && colorAt(d, m) < 0) d.work[m] = selected
+          const seeds = [i, m].filter(j => j >= 0).flatMap(j => wallsAround(R, C, d.walls, j))
+          if (spreadWalls(R, C, dots, d.walls, j => colorAt(d, j), seeds, 1, blocked)) d.wallsChanged = true
+        }
+      }
     }
   }
 
   const flush = () => {
     const d = drag.current
+    if (d.wallsChanged) setWalls({ v: [...d.walls.v], h: [...d.walls.h] })
     if (!d.changed) return
     if (d.kind === 'line') setWalls({ v: [...d.work.v], h: [...d.work.h] })
     else if (d.kind === 'memo') setMemo([...d.work])
+    else if (d.kind === 'cand') setCandOff([...d.work])
     else setPaint([...d.work])
   }
 
+  // A second finger turns the stroke into a pinch: whatever the first finger drew is taken back.
+  const cancelStroke = () => {
+    const d = drag.current
+    drag.current = null
+    setDragging(false)
+    if (!d || !(d.changed || d.wallsChanged)) return
+    setWalls(d.snap.walls)
+    setPaint(d.snap.paint)
+    setMemo(d.snap.memo)
+    setCandOff(d.snap.candOff)
+  }
+
   const onPointerDown = (e) => {
+    pointers.current.add(e.pointerId)
+    if (pointers.current.size > 1) { cancelStroke(); return }
     if (!info || solved || busy || covered) return
     const [x, y] = toCell(e)
-    const snap = { walls, paint, memo }
+    const snap = { walls, paint, memo, candOff }
+    const base = { snap, changed: false, last: [x, y], pointerId: e.pointerId }
     if (tool !== 'line') {
       const k = dotAt(puzzle.dots, x, y)
       if (k >= 0) { setSelected(s => (s === k ? -1 : k)); return } // tap the picked star again to drop it
@@ -500,22 +586,24 @@ export default function App() {
       if (tool === 'memo') {
         // the first cell decides whether this stroke adds or removes the picked color's mark
         if (selected < 0 || info.display[i] >= 0) return
-        const action = memo[i].includes(selected) ? 'remove' : 'add'
-        drag.current = { kind: 'memo', action, work: [...memo], snap, changed: false, last: [x, y] }
-        e.currentTarget.setPointerCapture(e.pointerId)
-        setDragging(true)
-        applyAt(x, y)
-        flush()
-        return
+        if (cands) {
+          if (!cands[i].includes(selected)) return
+          const action = candOff[i].includes(selected) ? 'add' : 'remove'
+          drag.current = { ...base, kind: 'cand', action, work: [...candOff] }
+        } else {
+          const action = memo[i].includes(selected) ? 'remove' : 'add'
+          drag.current = { ...base, kind: 'memo', action, work: [...memo] }
+        }
+      } else {
+        const action = paint[i] >= 0 ? 'erase' : selected >= 0 ? 'paint' : null
+        if (!action) return
+        drag.current = {
+          ...base, kind: 'color', action, work: [...paint],
+          walls: { v: [...walls.v], h: [...walls.h] }, wallsChanged: false,
+        }
       }
-      const action = paint[i] >= 0 ? 'erase' : selected >= 0 ? 'paint' : null
-      if (!action) return
-      drag.current = { kind: 'color', action, work: [...paint], snap, changed: false, last: [x, y] }
     } else {
-      drag.current = {
-        kind: 'line', value: null, work: { v: [...walls.v], h: [...walls.h] },
-        snap, changed: false, last: [x, y],
-      }
+      drag.current = { ...base, kind: 'line', value: null, work: { v: [...walls.v], h: [...walls.h] } }
     }
     e.currentTarget.setPointerCapture(e.pointerId)
     setDragging(true)
@@ -525,7 +613,7 @@ export default function App() {
 
   const onPointerMove = (e) => {
     const d = drag.current
-    if (!d) return
+    if (!d || e.pointerId !== d.pointerId) return
     const [x, y] = toCell(e)
     const [lx, ly] = d.last
     const steps = Math.max(1, Math.ceil(Math.hypot(x - lx, y - ly) / 0.08))
@@ -534,11 +622,19 @@ export default function App() {
     flush()
   }
 
-  const onPointerUp = () => {
+  const onPointerUp = (e) => {
+    pointers.current.delete(e.pointerId)
     const d = drag.current
+    if (!d || e.pointerId !== d.pointerId) return
     drag.current = null
     setDragging(false)
-    if (d?.changed) setHistory(h => [...h.slice(-199), d.snap])
+    if (d.changed || d.wallsChanged) setHistory(h => [...h.slice(-199), d.snap])
+  }
+
+  // the browser took the touch over (a pinch zoom): drop the stroke
+  const onPointerCancel = (e) => {
+    pointers.current.delete(e.pointerId)
+    cancelStroke()
   }
 
   // ---------------------------------------------------------------- sharing
@@ -547,14 +643,15 @@ export default function App() {
 
   // panels close on a press anywhere outside them
   useEffect(() => {
-    if (!shareOpen && !newOpen) return
+    if (!shareOpen && !newOpen && !settingsOpen) return
     const onDown = (e) => {
       if (shareRef.current && !shareRef.current.contains(e.target)) setShareOpen(false)
       if (newRef.current && !newRef.current.contains(e.target)) setNewOpen(false)
+      if (settingsRef.current && !settingsRef.current.contains(e.target)) setSettingsOpen(false)
     }
     document.addEventListener('pointerdown', onDown)
     return () => document.removeEventListener('pointerdown', onDown)
-  }, [shareOpen, newOpen])
+  }, [shareOpen, newOpen, settingsOpen])
 
   // "Include my progress": the link carries the board and time as they were when asked for
   const takeSnap = () => setSnap(progress ? { ...progress, elapsed } : null)
@@ -600,7 +697,7 @@ export default function App() {
       // the same size replaces the board on screen, which the menu already warns about
       if (p.size !== size) {
         const saved = loadSave(p.size)
-        const savedUnfinished = saved && hasProgress(saved) && !analyze(saved.puzzle, saved.walls, saved.paint).solved
+        const savedUnfinished = saved && hasProgress(saved) && !isSolved(saved.puzzle, saved.walls, saved.paint)
         const differs = saved && !(saved.puzzle.seed === p.seed && (saved.puzzle.v ?? 1) === p.version)
         if (savedUnfinished && (differs || p.state) &&
           !window.confirm(`Opening this code replaces your unfinished ${p.size} \u00d7 ${p.size} puzzle.`)) return
@@ -629,6 +726,39 @@ export default function App() {
               <button key={n} aria-pressed={size === n} onClick={() => setRequest({ size: n, seed: null })}>{n} × {n}</button>
             ))}
           </div>
+          <div className="settings-wrap" ref={settingsRef}>
+            <button className="icon-button" onClick={() => setSettingsOpen(o => !o)} aria-expanded={settingsOpen}
+              aria-label="Assists">
+              <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor"
+                strokeWidth="2" strokeLinecap="round">
+                <path d="M4 7 h9 M17 7 h3 M4 17 h3 M11 17 h9" />
+                <circle cx="15" cy="7" r="2" />
+                <circle cx="9" cy="17" r="2" />
+              </svg>
+            </button>
+            {settingsOpen && (
+              <div className="share-panel settings-panel" role="dialog" aria-label="Assists">
+                <label className="share-check assist-option">
+                  <input type="checkbox" checked={assist.mirror}
+                    onChange={e => setAssist(a => ({ ...a, mirror: e.target.checked }))} />
+                  <span>
+                    <strong>Auto mirror</strong>
+                    <span className="share-label">Star cells take their color. Painting or erasing a cell does
+                      the same to its mirror, and walls around a color are mirrored too.</span>
+                  </span>
+                </label>
+                <label className="share-check assist-option">
+                  <input type="checkbox" checked={assist.cands}
+                    onChange={e => setAssist(a => ({ ...a, cands: e.target.checked }))} />
+                  <span>
+                    <strong>Auto candidates</strong>
+                    <span className="share-label">Memos show every color a cell can still take, kept up to date.
+                      With Memo on, tap one to cross it out.</span>
+                  </span>
+                </label>
+              </div>
+            )}
+          </div>
           <button className="icon-button" onClick={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
             aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'}>
             <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
@@ -640,10 +770,10 @@ export default function App() {
       </header>
 
       <div className="board-wrap">
-        {puzzle && info && memo ? (
-          <Board puzzle={puzzle} walls={walls} memo={memo} info={info} hues={hues} dark={dark} tool={tool}
+        {puzzle && info && shownMemo ? (
+          <Board puzzle={puzzle} walls={walls} memo={shownMemo} info={info} hues={hues} dark={dark} tool={tool}
             selected={selected} busy={busy} celebrating={celebrating} covered={covered} svgRef={svgRef}
-            handlers={{ onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp }} />
+            handlers={{ onPointerDown, onPointerMove, onPointerUp, onPointerCancel }} />
         ) : (
           <div className="board-empty">
             {error ? (
