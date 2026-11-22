@@ -560,6 +560,8 @@ export default function App() {
     return r >= 0 && r < puzzle.R && c >= 0 && c < puzzle.C ? r * puzzle.C + c : -1
   }
 
+  const isCore = (j) => assist.mirror && coreOwn[j] >= 0
+
   // the color a cell shows while a stroke is under way (paint from the stroke's own copy)
   const colorAt = (d, j) => {
     if (assist.mirror && coreOwn[j] >= 0) return coreOwn[j]
@@ -598,7 +600,7 @@ export default function App() {
       if (d.action === 'add' && off) { d.work[i] = list.filter(k => k !== selected); d.changed = true }
     } else {
       const i = cellAt(x, y)
-      if (i < 0) return
+      if (i < 0 || isCore(i)) return // a dot's own cells keep its color while auto-mirror is on
       if (d.action === 'erase' && d.work[i] >= 0) {
         const k = d.work[i]
         d.work[i] = -1
@@ -673,7 +675,8 @@ export default function App() {
           drag.current = { ...base, kind: 'memo', action, work: [...memo] }
         }
       } else {
-        const action = paint[i] >= 0 ? 'erase' : selected >= 0 ? 'paint' : null
+        // a stroke may start on a dot's own cell (fixed color under auto-mirror) and paint on from there
+        const action = paint[i] >= 0 && !isCore(i) ? 'erase' : selected >= 0 ? 'paint' : null
         if (!action) return
         drag.current = {
           ...base, kind: 'color', action, work: [...paint],
