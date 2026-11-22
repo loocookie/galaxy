@@ -101,14 +101,31 @@ export function frameTwins(R, C, dots, i, k, blocked) {
   return out
 }
 
-/** Frame twins of every colored cell on the frame, spread like any wall. Mutates `walls`. */
+/** Walls between cell i and its neighbours of a different color (both colored). */
+export function colorBorders(R, C, colorAt, i) {
+  const k = colorAt(i)
+  if (k < 0) return []
+  const r = Math.floor(i / C), c = i % C, out = []
+  for (const j of [c > 0 && i - 1, c + 1 < C && i + 1, r > 0 && i - C, r + 1 < R && i + C]) {
+    if (j === false) continue
+    const kj = colorAt(j)
+    if (kj >= 0 && kj !== k) out.push(wallBetween(R, C, i, j))
+  }
+  return out
+}
+
+/**
+ * Walls auto-mirror can draw from the colors alone, spread like any wall: a border between two
+ * colors, and the frame twins of every colored cell on the frame. Mutates `walls`.
+ */
 export function mirrorFrame(R, C, dots, walls, colorAt, blocked) {
   const seeds = []
   for (let i = 0; i < R * C; i++) {
-    const r = Math.floor(i / C), c = i % C
-    if (r > 0 && r < R - 1 && c > 0 && c < C - 1) continue
     const k = colorAt(i)
-    if (k >= 0) seeds.push(...frameTwins(R, C, dots, i, k, blocked))
+    if (k < 0) continue
+    seeds.push(...colorBorders(R, C, colorAt, i).filter(w => !blocked[w.t].has(w.idx)))
+    const r = Math.floor(i / C), c = i % C
+    if (r === 0 || r === R - 1 || c === 0 || c === C - 1) seeds.push(...frameTwins(R, C, dots, i, k, blocked))
   }
   return spreadWalls(R, C, dots, walls, colorAt, seeds, 1, blocked)
 }

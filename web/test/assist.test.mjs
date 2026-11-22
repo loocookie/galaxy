@@ -58,6 +58,7 @@ for (const [n, pz] of puzzles.entries()) {
   const wf = B.emptyWalls(R, C)
   A.mirrorFrame(R, C, dots, wf, truth, blocked)
   check(allWalls(wf).every(x => !x.on || sol[x.t][x.idx]), `#${n} frame twins (full paint) are solution walls`)
+  check(JSON.stringify(wf) === JSON.stringify(sol), `#${n} full paint: borders give every solution wall`)
   const wc = B.emptyWalls(R, C)
   A.mirrorFrame(R, C, dots, wc, j => co[j], blocked)
   check(allWalls(wc).every(x => !x.on || sol[x.t][x.idx]), `#${n} frame twins (star cells only) are solution walls`)

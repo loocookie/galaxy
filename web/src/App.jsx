@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { analyze, assignHues, blockedWalls, emptyWalls, wallAt, STROKE_TOL, STROKE_ENDS, dotAt, mirror } from './board.js'
-import { coreOwner, withCores, spreadWalls, wallsAround, autoCandidates, frameTwins, mirrorFrame } from './assist.js'
+import { coreOwner, withCores, spreadWalls, wallsAround, autoCandidates, frameTwins, mirrorFrame, colorBorders } from './assist.js'
 import { formatCode, parseCode, shareLink, codeError, MAX_SEED } from './share.js'
 import { encodeProgress, decodeProgress } from './progress.js'
 import './App.css'
@@ -312,8 +312,8 @@ export default function App() {
   const info = useMemo(
     () => (puzzle && walls && shownPaint ? analyze(puzzle, walls, shownPaint) : null),
     [puzzle, walls, shownPaint])
-  // With auto-mirror on, a fresh board already has walls: the frame mirrored about the star
-  // cells on it. Those alone are not progress.
+  // With auto-mirror on, a fresh board already has walls: borders between star cells and the
+  // frame mirrored about them. Those alone are not progress.
   const baseWalls = useMemo(() => {
     if (!assist.mirror || !puzzle) return null
     const w = emptyWalls(puzzle.R, puzzle.C)
@@ -458,8 +458,8 @@ export default function App() {
   } : progress)
   const unfinished = !!puzzle && progressed && !solved
 
-  // Turning auto-mirror on (or opening a puzzle with it on) mirrors the frame at once: every
-  // colored cell on the frame gives a wall inside the board, cascading from there.
+  // Turning auto-mirror on (or opening a puzzle with it on) draws what the colors already give:
+  // borders between two colors, and the frame mirrored inside the board, cascading from there.
   const prevMirror = useRef(assist.mirror)
   useEffect(() => {
     const turnedOn = assist.mirror && !prevMirror.current
@@ -568,8 +568,10 @@ export default function App() {
           // paint the mirror cell too, then mirror the walls already drawn around both
           const m = mirror(R, C, i, dots[selected])
           if (m >= 0 && colorAt(d, m) < 0) d.work[m] = selected
+          // ...and draw the borders with other colors (then mirror those as well)
           const seeds = [i, m].filter(j => j >= 0).flatMap(j => [
-            ...wallsAround(R, C, d.walls, j), ...frameTwins(R, C, dots, j, selected, blocked)])
+            ...wallsAround(R, C, d.walls, j), ...frameTwins(R, C, dots, j, selected, blocked),
+            ...colorBorders(R, C, x => colorAt(d, x), j).filter(w => !blocked[w.t].has(w.idx))])
           if (spreadWalls(R, C, dots, d.walls, j => colorAt(d, j), seeds, 1, blocked)) d.wallsChanged = true
         }
       }
