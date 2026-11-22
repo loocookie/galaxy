@@ -3,6 +3,7 @@ import { analyze, assignHues, blockedWalls, emptyWalls, wallAt, STROKE_TOL, STRO
 import { coreOwner, withCores, spreadWalls, wallsAround, autoCandidates, frameTwins, mirrorFrame, colorBorders } from './assist.js'
 import { formatCode, parseCode, shareLink, codeError, MAX_SEED } from './share.js'
 import { encodeProgress, decodeProgress } from './progress.js'
+import { newLog, diffBoards, wallId, encodeLog } from './log.js'
 import './App.css'
 
 const SIZES = [7, 10, 15]
@@ -289,6 +290,19 @@ export default function App() {
   const drag = useRef(null)
   const pointers = useRef(new Set()) // fingers on the board; a second one means a pinch, not a stroke
   const dark = theme === 'dark'
+  // solve log (see log.js): `logged` is the board the last event left, `pending` names the next change
+  const [log, setLog] = useState(null)
+  const logged = useRef(null)
+  const pending = useRef(null)
+  const elapsedRef = useRef(0)
+  elapsedRef.current = elapsed
+  const assistRef = useRef(assist)
+  assistRef.current = assist
+  const addEvent = useCallback((kind, data = {}) => {
+    const t = Math.round(elapsedRef.current / 100)
+    setLog(l => (l ? { ...l, ev: [...l.ev, [t, kind, data]] } : l))
+  }, [])
+  const [logCopied, setLogCopied] = useState(false)
 
   useEffect(() => { storage.set(ASSIST_KEY, JSON.stringify(assist)) }, [assist])
 
@@ -298,9 +312,9 @@ export default function App() {
   const elapsedSec = Math.floor(elapsed / 1000)
   useEffect(() => {
     if (puzzle && walls && paint && memo && candOff) {
-      storage.set(saveKey(puzzle.R), JSON.stringify({ puzzle, walls, paint, memo, candOff, elapsed: elapsedSec * 1000 }))
+      storage.set(saveKey(puzzle.R), JSON.stringify({ puzzle, walls, paint, memo, candOff, log, elapsed: elapsedSec * 1000 }))
     }
-  }, [puzzle, walls, paint, memo, candOff, elapsedSec])
+  }, [puzzle, walls, paint, memo, candOff, log, elapsedSec])
 
   const hues = useMemo(() => (puzzle ? assignHues(puzzle.dots) : []), [puzzle])
   const blocked = useMemo(() => (puzzle ? blockedWalls(puzzle.R, puzzle.C, puzzle.dots) : null), [puzzle])
@@ -343,16 +357,23 @@ export default function App() {
     return () => clearTimeout(t)
   }, [solved, puzzle])
 
-  const applyPuzzle = (pz, w, p, mm, el = 0, off = null) => {
+  // `lg`: the saved log to carry on; otherwise a new log starts from this board
+  const applyPuzzle = (pz, w, p, mm, el = 0, off = null, lg = null) => {
+    const board = { walls: w, paint: p, memo: mm, candOff: off ?? emptyMemo(pz.R * pz.C) }
+    const code = Number.isInteger(pz.seed) ? formatCode(pz.v ?? 1, pz.R, pz.seed) : ''
     setStarted(false)
     setElapsed(el)
     setPuzzle(pz)
     setWalls(w)
     setPaint(p)
     setMemo(mm)
-    setCandOff(off ?? emptyMemo(pz.R * pz.C))
+    setCandOff(board.candOff)
     setHistory([])
     setSelected(-1)
+    setLog(lg?.code === code && lg.v === 1 ? lg
+      : newLog({ code, R: pz.R, C: pz.C, assist: assistRef.current, board, elapsed: el }))
+    logged.current = { puzzle: pz, ...board }
+    pending.current = null
   }
 
   // Start `pz` from shared progress, falling back to `base` (a save, or null for a fresh board).
@@ -361,7 +382,7 @@ export default function App() {
     if (token !== genToken.current) return
     const n = pz.R * pz.C
     const fallback = () => (base
-      ? applyPuzzle(pz, base.walls, base.paint, base.memo, base.elapsed, base.candOff)
+      ? applyPuzzle(pz, base.walls, base.paint, base.memo, base.elapsed, base.candOff, base.log)
       : applyPuzzle(pz, emptyWalls(pz.R, pz.C), Array(n).fill(-1), emptyMemo(n)))
     if (!st) { fallback(); setNotice(codeError.state); return }
     const unfinished = base && hasProgress(base) && !isSolved(pz, base.walls, base.paint)
@@ -403,7 +424,7 @@ export default function App() {
       const token = ++genToken.current // drop any generation still in flight
       setBusy(false)
       if (state && seed !== null) openShared(saved.puzzle, saved, state, confirmed, token)
-      else applyPuzzle(saved.puzzle, saved.walls, saved.paint, saved.memo, saved.elapsed, saved.candOff)
+      else applyPuzzle(saved.puzzle, saved.walls, saved.paint, saved.memo, saved.elapsed, saved.candOff, saved.log)
     } else {
       setPuzzle(null)
       generate(n, seed, seed !== null ? state : null)
@@ -434,9 +455,32 @@ export default function App() {
     return () => clearInterval(id)
   }, [running])
 
+  // Every change to the board, once a stroke is over, goes into the log as one event.
+  useEffect(() => {
+    const prev = logged.current
+    if (!puzzle || !walls || !paint || !memo || !candOff || dragging || !prev || prev.puzzle !== puzzle) return
+    const cur = { puzzle, walls, paint, memo, candOff }
+    const change = diffBoards(prev, cur)
+    logged.current = cur
+    if (!change) return
+    const { kind = 'other', ...extra } = pending.current ?? {}
+    pending.current = null
+    addEvent(kind, { ...change, ...extra })
+  }, [puzzle, walls, paint, memo, candOff, dragging, addEvent])
+
+  useEffect(() => { if (puzzle) addEvent(running ? 'run' : 'stop') }, [running]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (solved && puzzle) addEvent('solved') }, [solved]) // eslint-disable-line react-hooks/exhaustive-deps
+  const assistLogged = useRef(assist)
+  useEffect(() => {
+    if (assistLogged.current === assist) return
+    assistLogged.current = assist
+    if (puzzle) addEvent('assist', { ...assist })
+  }, [assist]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // a solved board is final: no more drawing, undo or reset
   const handleUndo = useCallback(() => {
     if (!history.length || covered || solved) return
+    pending.current = { kind: 'undo' }
     const prev = history[history.length - 1]
     setWalls(prev.walls)
     setPaint(prev.paint)
@@ -468,6 +512,7 @@ export default function App() {
     const w = { v: [...walls.v], h: [...walls.h] }
     if (!mirrorFrame(puzzle.R, puzzle.C, puzzle.dots, w, j => info.display[j], blocked)) return
     if (turnedOn) setHistory(h => [...h.slice(-199), { walls, paint, memo, candOff }])
+    pending.current = { kind: 'auto' }
     setWalls(w)
   }, [assist.mirror, puzzle]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -481,6 +526,7 @@ export default function App() {
     if (!puzzle || solved) return
     if (progressed && !resetArmed) { setResetArmed(true); return }
     setResetArmed(false)
+    pending.current = { kind: 'reset' }
     setHistory(h => [...h.slice(-199), { walls, paint, memo, candOff }])
     setWalls(baseWalls ? { v: [...baseWalls.v], h: [...baseWalls.h] } : emptyWalls(puzzle.R, puzzle.C))
     setPaint(Array(puzzle.R * puzzle.C).fill(-1))
@@ -532,6 +578,7 @@ export default function App() {
       if (!w) return
       const arr = d.work[w.t]
       if (d.value === null) d.value = arr[w.idx] ? 0 : 1 // the first edge decides: draw or erase
+      d.touched.add(wallId(R, C, w.t, w.idx))
       if (assist.mirror) {
         // drawing or erasing a wall does the same to its mirror images about the colors it borders
         if (spreadWalls(R, C, dots, d.work, j => colorAt(d, j), [w], d.value, blocked)) d.changed = true
@@ -556,6 +603,7 @@ export default function App() {
         const k = d.work[i]
         d.work[i] = -1
         d.changed = true
+        d.touched.add(i)
         if (assist.mirror) {
           const m = mirror(R, C, i, dots[k])
           if (m >= 0 && d.work[m] === k) d.work[m] = -1
@@ -564,6 +612,7 @@ export default function App() {
       if (d.action === 'paint' && d.work[i] < 0) {
         d.work[i] = selected
         d.changed = true
+        d.touched.add(i)
         if (assist.mirror) {
           // paint the mirror cell too, then mirror the walls already drawn around both
           const m = mirror(R, C, i, dots[selected])
@@ -606,7 +655,7 @@ export default function App() {
     if (!info || solved || busy || covered) return
     const [x, y] = toCell(e)
     const snap = { walls, paint, memo, candOff }
-    const base = { snap, changed: false, last: [x, y], pointerId: e.pointerId }
+    const base = { snap, changed: false, last: [x, y], pointerId: e.pointerId, touched: new Set() }
     if (tool !== 'line') {
       const k = dotAt(puzzle.dots, x, y)
       if (k >= 0) { setSelected(s => (s === k ? -1 : k)); return } // tap the picked star again to drop it
@@ -657,7 +706,12 @@ export default function App() {
     if (!d || e.pointerId !== d.pointerId) return
     drag.current = null
     setDragging(false)
-    if (d.changed || d.wallsChanged) setHistory(h => [...h.slice(-199), d.snap])
+    if (d.changed || d.wallsChanged) {
+      setHistory(h => [...h.slice(-199), d.snap])
+      // what the pointer touched itself; anything else in the change came from auto-mirror
+      const touched = [...d.touched]
+      pending.current = { kind: d.kind, ...(d.kind === 'line' ? { uw: touched } : d.kind === 'color' ? { up: touched } : {}) }
+    }
   }
 
   // the browser took the touch over (a pinch zoom): drop the stroke
@@ -709,6 +763,16 @@ export default function App() {
       setTimeout(() => setCopied(false), 1600)
     } catch {
       setShareError('Copying isn\u2019t allowed here. Select the link above and copy it.')
+    }
+  }
+
+  const copyLog = async () => {
+    try {
+      await navigator.clipboard.writeText(await encodeLog(log))
+      setLogCopied(true)
+      setTimeout(() => setLogCopied(false), 1600)
+    } catch {
+      setShareError('Copying isn\u2019t allowed here.')
     }
   }
 
@@ -853,6 +917,12 @@ export default function App() {
                   onChange={e => { setWithProgress(e.target.checked); takeSnap(); setCopied(false) }} />
                 Include my progress{snapHasProgress ? ` at ${formatTime(snap.elapsed)}` : ''}
               </label>
+            </div>
+            <div className="share-block">
+              <p className="share-label">For difficulty research: every move with its time, and the assists used.</p>
+              <button className="text-button" onClick={copyLog} disabled={!log}>
+                {logCopied ? 'Copied' : 'Copy solve log'}
+              </button>
             </div>
             {shareError && <p className="share-error" role="alert">{shareError}</p>}
           </div>
