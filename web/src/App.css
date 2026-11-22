@@ -366,8 +366,10 @@ kbd {
 
 /* Phones: every row spans the board's width so the column reads as one block. */
 @media (max-width: 480px) {
-  .header-controls { gap: 8px; }
-  .header .segmented button { padding: 6px 10px; }
+  /* the controls get their own row under the title: span it, sizes share the room */
+  .header-controls { gap: 8px; width: 100%; }
+  .header .segmented { flex: 1; }
+  .header .segmented button { padding: 6px 10px; flex: 1; justify-content: center; }
   .header .icon-button { width: 36px; height: 36px; }
 }
 @media (max-width: 360px) {
