@@ -24,6 +24,7 @@ from galaxy import GENERATOR_VERSION, Board, Solver, generate_sim
 
 LOG_DIR = Path(__file__).parent / 'data' / 'logs'
 REPLAY_DIR = Path(__file__).parent / 'web' / 'replays'  # not in git; see web/replay.html
+NOTES_FILE = Path(__file__).parent / 'data' / 'replay_notes.json'  # questions shown on the replay page
 
 
 def decode(text: str) -> dict:
@@ -432,6 +433,27 @@ def replay_data(log: dict) -> dict:
             'ev': log['ev'], 'strokes': strokes}
 
 
+def replay_notes(log: dict, name: str) -> list[dict]:
+    """The questions in data/replay_notes.json for this log, each placed at its event:
+    {id, at (event index), try ([cell, color] or None), text, answer}."""
+    if not NOTES_FILE.exists():
+        return []
+    C = log['C']
+    out = []
+    for n in json.loads(NOTES_FILE.read_text(encoding='utf-8'))['notes']:
+        if n['log'] not in name:
+            continue
+        cell = (n['cell'][0] - 1) * C + n['cell'][1] - 1 if 'cell' in n else None
+        at = next((i for i, (t, kind, data) in enumerate(log['ev'])
+                   if fmt(t) == n['time'] and (kind == n['kind'] if 'kind' in n else
+                                                isinstance(data, dict) and cell in data.get('up', []))), None)
+        if at is None:
+            raise SystemExit(f"note {n['id']}: no event at {n['time']} for {n.get('cell') or n.get('kind')}")
+        out.append({'id': n['id'], 'at': at, 'text': n['text'], 'answer': n.get('answer', ''),
+                    'try': [cell, n['try']] if 'try' in n else None})
+    return sorted(out, key=lambda x: x['at'])
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -453,8 +475,10 @@ def main():
         for f in args.files:
             log = json.loads(Path(f).read_text(encoding='utf-8'))
             path = REPLAY_DIR / Path(f).name
-            path.write_text(json.dumps(replay_data(log)), encoding='utf-8')
-            print(f'wrote {path}')
+            data = replay_data(log)
+            data['notes'] = replay_notes(log, Path(f).name)
+            path.write_text(json.dumps(data), encoding='utf-8')
+            print(f'wrote {path} ({len(data["notes"])} notes)')
         return
     if args.cmd in ('moves', 'seen'):
         log = json.loads(Path(args.file).read_text(encoding='utf-8'))

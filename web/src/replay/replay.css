@@ -39,3 +39,10 @@ button.replay-chip { cursor: pointer; }
 .replay-chain { margin: 10px 0; padding: 8px 10px; border-radius: 8px; background: var(--ink-faint); }
 .replay-chain p { margin: 4px 0; }
 .replay-check { display: flex; gap: 6px; align-items: center; margin-top: 10px; font-size: 14px; }
+.replay-note { margin: 10px 0; padding: 10px 12px; border-radius: 8px; border: 2px solid var(--ink); }
+.replay-note p { margin: 6px 0 0; line-height: 1.5; }
+.replay-note-id { font-weight: 700; font-size: 18px; letter-spacing: 0.02em; }
+.replay-note-answer { padding-top: 6px; border-top: 1px solid var(--ink-faint); color: var(--ink-soft); }
+.replay-note-list { margin: 12px 0 4px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.replay-note-list h3 { width: 100%; margin: 0 0 2px; font-size: 15px; }
+.replay-chip.is-answered { opacity: 0.65; }

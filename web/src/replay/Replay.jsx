@@ -26,10 +26,11 @@ const VERDICT = {
   stuck: 'the solver could not settle this',
 }
 const flagged = (s) => s && s.cells.some(c => c.verdict !== 'basic')
-// a link can open a place: ?log=<part of the file name>&at=<event>&try=<cell>:<color>
+// a link can open a place: ?log=<part of the file name>&at=<event>&try=<cell>:<color>, or ?note=<question id>
 const PARAMS = new URLSearchParams(window.location.search)
 const START = {
   name: NAMES.find(n => PARAMS.get('log') && n.includes(PARAMS.get('log'))) ?? NAMES[0] ?? null,
+  note: PARAMS.get('note'),
   at: Number(PARAMS.get('at')) || 0,
   focus: PARAMS.get('try')?.split(':').map(Number) ?? null,
 }
@@ -106,6 +107,15 @@ export default function Replay() {
   const [chainLen, setChainLen] = useState(0)
   const [showBasic, setShowBasic] = useState(false)
 
+  // go to event `at`, showing the trial of color `tr[1]` on cell `tr[0]` when there is one
+  const place = (d, at, tr) => {
+    setPos(at)
+    const [cell, color] = tr ?? []
+    const ch = d.strokes[at]?.cells.find(c => c.cell === cell)?.chains?.[color]
+    setFocus(ch ? { cell, color } : null)
+    setChainLen(ch ? ch.steps.length : 0)
+  }
+
   useEffect(() => {
     if (!name) return
     let live = true
@@ -114,11 +124,9 @@ export default function Replay() {
       const d = mod.default
       setData(d)
       const first = name === START.name
-      setPos(first ? Math.min(START.at, d.ev.length) : 0)
-      const [cell, color] = first && START.focus ? START.focus : []
-      const ch = d.strokes[START.at]?.cells.find(c => c.cell === cell)?.chains?.[color]
-      setFocus(ch ? { cell, color } : null)
-      setChainLen(ch ? ch.steps.length : 0)
+      const note = first && (d.notes ?? []).find(n => n.id === START.note)
+      if (note) { place(d, note.at, note.try); return }
+      place(d, first ? Math.min(START.at, d.ev.length) : 0, first ? START.focus : null)
     })
     return () => { live = false }
   }, [name])
@@ -134,6 +142,11 @@ export default function Replay() {
   const nextFlag = (dir) => {
     const list = dir > 0 ? flaggedAt.filter(i => i > pos) : flaggedAt.filter(i => i < pos).reverse()
     if (list.length) go(list[0])
+  }
+  const notes = data?.notes ?? []
+  const nextNote = (dir) => {
+    const list = dir > 0 ? notes.filter(n => n.at > pos) : notes.filter(n => n.at < pos).reverse()
+    if (list.length) place(data, list[0].at, list[0].try)
   }
 
   useEffect(() => {
@@ -192,6 +205,10 @@ export default function Replay() {
             <span className="replay-sep" />
             <button className="text-button" onClick={() => nextFlag(-1)}>◀ flagged</button>
             <button className="text-button" onClick={() => nextFlag(1)}>flagged ▶</button>
+            {notes.length > 0 && <>
+              <button className="text-button" onClick={() => nextNote(-1)}>◀ question</button>
+              <button className="text-button" onClick={() => nextNote(1)}>question ▶</button>
+            </>}
           </div>
           <input type="range" min={0} max={last} value={pos} onChange={e => go(Number(e.target.value))} className="replay-slider" />
           <p className="replay-where">
@@ -200,6 +217,14 @@ export default function Replay() {
             {stroke && <> · waited {Math.round(stroke.gap / 10)}s</>}
           </p>
           <p className="replay-hint">The board is shown just before the event; outlined cells are the ones it paints. ← → step.</p>
+
+          {notes.filter(n => n.at === pos).map(n => (
+            <div key={n.id} className="replay-note">
+              <div className="replay-note-id">{n.id}</div>
+              <p>{n.text}</p>
+              {n.answer && <p className="replay-note-answer">{n.answer}</p>}
+            </div>
+          ))}
 
           {stroke && (
             <ul className="replay-cells">
@@ -242,6 +267,17 @@ export default function Replay() {
             <input type="checkbox" checked={showBasic} onChange={e => setShowBasic(e.target.checked)} />
             Show cells basic deduction settles on this board (not yet on the player's)
           </label>
+          {notes.length > 0 && (
+            <div className="replay-note-list">
+              <h3>Questions</h3>
+              {notes.map(n => (
+                <button key={n.id} className={`replay-chip${n.at === pos ? ' is-on' : ''}${n.answer ? ' is-answered' : ''}`}
+                  onClick={() => place(data, n.at, n.try)}>
+                  {n.id} · {clock(data.ev[n.at][0])}{n.answer ? ' ✓' : ''}
+                </button>
+              ))}
+            </div>
+          )}
           <p className="replay-hint">Flagged strokes: {flaggedAt.length}. Settled for the player = painted right, a dot's own cells, or a region closed off by walls.</p>
         </section>
       </div>
