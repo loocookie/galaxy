@@ -42,6 +42,15 @@
       },
       "mistakes": [],
       "notes": "Given in order 7A-7H (2026-11-21)."
+    },
+    "friend2": {
+      "times": {
+        "15D": 2207
+      },
+      "mistakes": [
+        "15D"
+      ],
+      "notes": "15D with auto mirror, full solve log in data/logs; reset the board twice (16:23, 19:58) and replayed from memory, so the last 17 minutes are not a fresh solve (2026-11-23)."
     }
   }
 }
