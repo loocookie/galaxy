@@ -22,10 +22,11 @@
         "15A": 1567,
         "15B": 2213,
         "15C": 1439,
-        "15E": 2111
+        "15E": 2111,
+        "15D": 3786
       },
       "mistakes": [],
-      "notes": "Mistakes cost a lot of time, so some values may be outliers (2026-11-21). 15x15: 15A, 15B solved; gave up on 15C (2026-11-22). 15C retried and solved, 15E solved, both with auto mirror and solve logs in data/logs (2026-11-23).",
+      "notes": "Mistakes cost a lot of time, so some values may be outliers (2026-11-21). 15x15: 15A, 15B solved; gave up on 15C (2026-11-22). 15C retried and solved, 15E solved, both with auto mirror and solve logs in data/logs (2026-11-23). 15D: 63:06, its log covers only 41:09 onward (resumed from a save made before logs existed); assists off before that.",
       "gave_up": []
     },
     "friend1": {

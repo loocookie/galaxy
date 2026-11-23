@@ -134,20 +134,52 @@ def summary(log: dict) -> str:
     return '\n'.join(out)
 
 
+def settled(R, C, owner, walls, paint, cores) -> set[int]:
+    """Cells the player has right: painted with the answer, a dot's own cells, or inside a
+    region the drawn walls close off that is exactly one answer region."""
+    nv, N = R * (C - 1), R * C
+    out = {i for i in range(N) if paint[i] == owner[i]} | set(cores)
+    seen = [False] * N
+    for s in range(N):
+        if seen[s]:
+            continue
+        seen[s], comp, st = True, [s], [s]
+        while st:
+            a = st.pop()
+            r, c = divmod(a, C)
+            for b, wid in ((a + 1, r * (C - 1) + c) if c + 1 < C else (-1, 0),
+                           (a - 1, r * (C - 1) + c - 1) if c > 0 else (-1, 0),
+                           (a + C, nv + a) if r + 1 < R else (-1, 0),
+                           (a - C, nv + a - C) if r > 0 else (-1, 0)):
+                if b >= 0 and not walls[wid] and not seen[b]:
+                    seen[b] = True
+                    comp.append(b)
+                    st.append(b)
+        k = owner[s]
+        if all(owner[i] == k for i in comp) and len(comp) == owner.count(k):
+            out.update(comp)
+    return out
+
+
 def color_moves(log: dict, pz):
     """The player's paint strokes, replayed: (t, wait since the previous board change,
-    cells the pointer painted, paint just before the stroke, paint after it)."""
-    N = log['R'] * log['C']
-    paint, prev = [-1] * N, 0
+    cells the pointer painted, cells settled just before the stroke, paint just before it,
+    paint after it). The log may start from a board already under way (its 'open' event)."""
+    R, C = log['R'], log['C']
+    cores = {i for d in pz.dots for i in Board(R, C).core(d)}
+    paint, walls, prev = [-1] * (R * C), [0] * len(solution_walls(R, C, pz.owner)), 0
     for t, kind, data in log['ev']:
         if not isinstance(data, dict) or not ('w' in data or 'p' in data):
             continue
         before = paint[:]
+        known = settled(R, C, pz.owner, walls, before, cores) if kind == 'color' else None
         for cell, k in data.get('p', []):
             paint[cell] = k
+        for wid in data.get('w', []):
+            walls[wid] ^= 1
         gap, prev = t - prev, t
         if kind == 'color':
-            yield t, gap, [c for c in data.get('up', []) if paint[c] >= 0], before, paint[:]
+            yield t, gap, [c for c in data.get('up', []) if paint[c] >= 0], frozenset(known), before, paint[:]
 
 
 def _verdicts(sv: Solver, O, known: frozenset):
@@ -189,16 +221,14 @@ def moves_report(log: dict, all_moves: bool = False) -> str:
     """Each paint stroke judged against the board the player had just before it: was it a
     basic deduction for the solver, or did the solver need trials (how many, how deep)?
     For those, the colors basic deduction could not rule out: either the player missed one
-    of them, or used logic the solver doesn't have. Cells count as settled when painted
-    right (dots' own cells always); walls are not used."""
+    of them, or used logic the solver doesn't have. Settled cells: see `settled`."""
     R, C = log['R'], log['C']
     pz = puzzle_for(log['code'])
     O = pz.owner
     sv = Solver(R, C, pz.dots)
     cores = {j for c in sv.cores for j in c}
     out, cache, n_basic = [f"{log['code']}  per stroke: (row, col) from 1, color = dot index"], {}, 0
-    for t, gap, cells, before, after in color_moves(log, pz):
-        known = frozenset(i for i in range(R * C) if before[i] == O[i] or i in cores)
+    for t, gap, cells, known, before, after in color_moves(log, pz):
         cells = [c for c in cells if c not in known]
         if not cells:
             continue
@@ -249,12 +279,11 @@ def seen_report(log: dict) -> str:
         return seen
 
     cache, rows = {}, []
-    for t, gap, cells, before, after in color_moves(log, pz):
-        own = [O[i] if before[i] == O[i] or i in cores else -1 for i in range(R * C)]
+    for t, gap, cells, known, before, after in color_moves(log, pz):
+        own = [O[i] if i in known else -1 for i in range(R * C)]
         cells = [c for c in cells if own[c] < 0 and after[c] == O[c]]
         if not cells:
             continue
-        known = frozenset(i for i in range(R * C) if own[i] >= 0)
         if known not in cache:
             cache[known] = _verdicts(sv, O, known)
         when, _ = cache[known]
