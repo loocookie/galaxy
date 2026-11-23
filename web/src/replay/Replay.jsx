@@ -73,9 +73,12 @@ function Overlay({ data, stroke, focus, chainLen, showBasic, hues, dark }) {
         key: `b${i}`, fill: washColor(hues[data.owner[i]], dark), opacity: 0.55,
         style: { stroke: 'var(--ink-soft)' }, strokeDasharray: '0.08 0.08', strokeWidth: 0.03,
       }))}
-      {steps.flatMap(([a, b, k], n) => (a === b ? [a] : [a, b]).map(i => (
+      {steps.flatMap(([a, b, k, byPath], n) => (a === b ? [a] : [a, b]).map(i => (
         <g key={`c${n}-${i}`}>
-          {cellRect(i, { fill: washColor(hues[k], dark), opacity: 0.92, style: { stroke: starColor(hues[k], dark) }, strokeWidth: 0.05 })}
+          {cellRect(i, {
+            fill: washColor(hues[k], dark), opacity: 0.92, style: { stroke: byPath ? 'var(--ink)' : starColor(hues[k], dark) },
+            strokeWidth: byPath ? 0.09 : 0.05, strokeDasharray: byPath ? '0.12 0.07' : undefined,
+          })}
           <text x={i % C + 0.5} y={Math.floor(i / C) + 0.62} className="replay-step">{n + 1}</text>
         </g>
       )))}
@@ -259,7 +262,7 @@ export default function Replay() {
               </p>
               <input type="range" min={0} max={fchain.steps.length} value={chainLen}
                 onChange={e => setChainLen(Number(e.target.value))} className="replay-slider" />
-              <p className="replay-hint">Numbers: order of placement (a cell and its mirror share one). Drag to follow it step by step.</p>
+              <p className="replay-hint">Numbers: order of placement (a cell and its mirror share one); a heavy dashed border means the path rule forced it (every way from a placed cell to its dot runs through it). Drag to follow it step by step.</p>
             </div>
           )}
 

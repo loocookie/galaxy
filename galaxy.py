@@ -338,11 +338,13 @@ class Solver:
     found so far. Results are identical to the original set-based solver.
     """
 
-    def __init__(self, R: int, C: int, dots: list[Dot], max_level: int = 2, trial_mult: float = 4.0):
+    def __init__(self, R: int, C: int, dots: list[Dot], max_level: int = 2, trial_mult: float = 4.0,
+                 paths: bool = True):
         self.b = b = Board(R, C)
         self.dots = list(dots)
         self.D = len(dots)
         self.max_level, self.trial_mult = max_level, trial_mult
+        self.paths = paths  # the path rule (_path_forced) in solve(); count_solutions never uses it
         seen: set[int] = set()
         self.cores = []
         for d in self.dots:
@@ -637,6 +639,37 @@ class Solver:
             did = True
         return did
 
+    def _path_forced(self, own, cand) -> list[tuple[int, int]]:
+        """The path rule (2026-11-23, from a player's explanation): a cell of dot k must reach
+        k's core through cells that can still be k, so a cell lying on every such path must
+        be k too. Returns those (cell, k), from the cells owned by k but not yet joined to its
+        core by owned cells. One BFS per candidate cell: fine for 15x15."""
+        nbrs, N, out = self.b.nbrs, self.b.N, []
+        for k in range(self.D):
+            bit, core = 1 << k, self.cores[k]
+
+            def grow(seen, ok):
+                st = list(seen)
+                while st:
+                    a = st.pop()
+                    for b in nbrs[a]:
+                        if b not in seen and ok(b):
+                            seen.add(b)
+                            st.append(b)
+                return seen
+
+            block = grow(set(core), lambda b: own[b] == k)
+            loose = [x for x in range(N) if own[x] == k and x not in block]
+            if not loose:
+                continue
+            for y in grow(set(block), lambda b: cand[b] & bit):
+                if own[y] >= 0:
+                    continue
+                r = grow(set(block), lambda b: b != y and cand[b] & bit)
+                if any(x not in r for x in loose):
+                    out.append((y, k))
+        return out
+
     def _settle(self, own, cand, queue, dirty, level: int) -> tuple[str, int]:
         """Propagate in whole rounds, with human-order trials up to `level`.
         Returns (status, rounds): 'contra' | 'solved' | 'stuck'."""
@@ -652,6 +685,15 @@ class Solver:
                     continue
             except _Contradiction:
                 return 'contra', rounds
+            if self.paths:
+                forced = self._path_forced(own, cand)
+                for y, k in forced:
+                    if not cand[y] >> k & 1:
+                        return 'contra', rounds
+                    self._keep_only(cand, y, k, queue)
+                if forced:
+                    rounds += 1
+                    continue
             hit = self._find_trial(own, cand, level) if level > 0 else None
             if hit is None:
                 return 'stuck', rounds
@@ -670,6 +712,15 @@ class Solver:
                 out.setdefault((min(i, mir[k][i]), k), i)
         return out
 
+    def _forced(self, own, cand) -> dict[tuple[int, int], int]:
+        """_singles plus the cells the path rule forces (when on): a player draws the path
+        right after placing a cell away from its dot's block, so they count like any other."""
+        out = self._singles(own, cand)
+        if self.paths:
+            for y, k in self._path_forced(own, cand):
+                out.setdefault((min(y, self.mir[k][y]), k), y)
+        return out
+
     def _walk(self, own, cand, queue, dirty, steps=None, after=()) -> tuple[str, int, float]:
         """Basic deductions, chain by chain. Placing a cell (and its mirror) often forces a
         cell right next to one of them: following that is free. When nothing next to the last
@@ -684,7 +735,7 @@ class Solver:
                 return 'contra', chains, cost
             if all(o >= 0 for o in own):
                 return 'solved', chains, cost
-            pairs = self._singles(own, cand)
+            pairs = self._forced(own, cand)
             if not pairs:
                 return 'stuck', chains, cost
             if fresh is None:
@@ -717,7 +768,7 @@ class Solver:
             if not self._eliminate(cand, queue, dirty):
                 return 'contra', chains, cost
             near = set(nbrs[i]) | set(nbrs[m]) | {i, m}
-            fresh = {p for p, j in self._singles(own, cand).items()
+            fresh = {p for p, j in self._forced(own, cand).items()
                      if p not in pairs and (j in near or mir[p[1]][j] in near)}
 
     def solve(self) -> SolveResult:

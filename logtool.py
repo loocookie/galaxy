@@ -365,7 +365,8 @@ def trial_chain(sv: Solver, own, cand, c: int, k: int) -> dict:
             return {'end': 'contra', 'at': bad, 'steps': steps}
         if all(o >= 0 for o in own):
             return {'end': 'solved', 'at': -1, 'steps': steps}
-        pairs = sv._singles(own, cand)
+        singles = sv._singles(own, cand)
+        pairs = sv._forced(own, cand)
         if not pairs:
             return {'end': 'stuck', 'at': -1, 'steps': steps}
         # continue next to the last placement when something there is forced, as _walk does
@@ -383,6 +384,8 @@ def trial_chain(sv: Solver, own, cand, c: int, k: int) -> dict:
             return {'end': 'contra', 'at': mir[kk][i], 'steps': steps}
         old = set(pairs)
         near = place(i, kk)
+        if (min(i, mir[kk][i]), kk) not in singles:
+            steps[-1].append(1)  # forced by the path rule, not by candidates
         dmaps.pop(kk, None)
 
 
