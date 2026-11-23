@@ -4,6 +4,7 @@
     python logtool.py show data/logs/X.json      summary of a stored log
     python logtool.py moves data/logs/X.json     strokes the solver would have needed trials for
     python logtool.py seen data/logs/X.json      wait before strokes vs. how open the cell looked
+    python logtool.py replay data/logs/*.json    data for the local replay page (web/replay.html)
 
 A log is 'glxlog1:' + base64url(deflate-raw(JSON)); the format is described in web/src/log.js.
 The summary replays the log against the puzzle (regenerated from its code) and reports the
@@ -22,6 +23,7 @@ from pathlib import Path
 from galaxy import GENERATOR_VERSION, Board, Solver, generate_sim
 
 LOG_DIR = Path(__file__).parent / 'data' / 'logs'
+REPLAY_DIR = Path(__file__).parent / 'web' / 'replays'  # not in git; see web/replay.html
 
 
 def decode(text: str) -> dict:
@@ -162,13 +164,13 @@ def settled(R, C, owner, walls, paint, cores) -> set[int]:
 
 
 def color_moves(log: dict, pz):
-    """The player's paint strokes, replayed: (t, wait since the previous board change,
+    """The player's paint strokes, replayed: (event index, t, wait since the previous board change,
     cells the pointer painted, cells settled just before the stroke, paint just before it,
     paint after it). The log may start from a board already under way (its 'open' event)."""
     R, C = log['R'], log['C']
     cores = {i for d in pz.dots for i in Board(R, C).core(d)}
     paint, walls, prev = [-1] * (R * C), [0] * len(solution_walls(R, C, pz.owner)), 0
-    for t, kind, data in log['ev']:
+    for ei, (t, kind, data) in enumerate(log['ev']):
         if not isinstance(data, dict) or not ('w' in data or 'p' in data):
             continue
         before = paint[:]
@@ -179,7 +181,7 @@ def color_moves(log: dict, pz):
             walls[wid] ^= 1
         gap, prev = t - prev, t
         if kind == 'color':
-            yield t, gap, [c for c in data.get('up', []) if paint[c] >= 0], frozenset(known), before, paint[:]
+            yield ei, t, gap, [c for c in data.get('up', []) if paint[c] >= 0], frozenset(known), before, paint[:]
 
 
 def _verdicts(sv: Solver, O, known: frozenset):
@@ -228,7 +230,7 @@ def moves_report(log: dict, all_moves: bool = False) -> str:
     sv = Solver(R, C, pz.dots)
     cores = {j for c in sv.cores for j in c}
     out, cache, n_basic = [f"{log['code']}  per stroke: (row, col) from 1, color = dot index"], {}, 0
-    for t, gap, cells, known, before, after in color_moves(log, pz):
+    for _, t, gap, cells, known, before, after in color_moves(log, pz):
         cells = [c for c in cells if c not in known]
         if not cells:
             continue
@@ -279,7 +281,7 @@ def seen_report(log: dict) -> str:
         return seen
 
     cache, rows = {}, []
-    for t, gap, cells, known, before, after in color_moves(log, pz):
+    for _, t, gap, cells, known, before, after in color_moves(log, pz):
         own = [O[i] if i in known else -1 for i in range(R * C)]
         cells = [c for c in cells if own[c] < 0 and after[c] == O[c]]
         if not cells:
@@ -306,6 +308,130 @@ def seen_report(log: dict) -> str:
     return '\n'.join(out)
 
 
+def _eliminate_at(sv: Solver, cand, queue, dirty) -> int:
+    """Solver._eliminate that names the cell left without a candidate: -1 if none."""
+    N, nbrs, mir, cores = sv.b.N, sv.b.nbrs, sv.mir, sv.cores
+    while queue or dirty:
+        while queue:
+            i, k = queue.pop()
+            dirty.add(k)
+            m = mir[k][i]
+            if m >= 0 and cand[m] >> k & 1:
+                cand[m] &= ~(1 << k)
+                if not cand[m]:
+                    return m
+                queue.append((m, k))
+        if dirty:
+            k = dirty.pop()
+            seen, st = set(cores[k]), list(cores[k])
+            while st:
+                x = st.pop()
+                for y in nbrs[x]:
+                    if y not in seen and cand[y] >> k & 1:
+                        seen.add(y)
+                        st.append(y)
+            for i in range(N):
+                if cand[i] >> k & 1 and i not in seen:
+                    cand[i] &= ~(1 << k)
+                    if not cand[i]:
+                        return i
+                    queue.append((i, k))
+    return -1
+
+
+def trial_chain(sv: Solver, own, cand, c: int, k: int) -> dict:
+    """Put color k on cell c (and its mirror) and follow basic deductions the way the solver
+    does (chain by chain, nearest first). Returns the placements [cell, mirror, color] in order, and how it
+    ends: 'contra' with the cell left without a color ('at'), or 'stuck' / 'solved'."""
+    own, cand, nbrs, mir = own[:], cand[:], sv.b.nbrs, sv.mir
+    m = mir[k][c]
+    if m < 0 or not cand[m] >> k & 1:
+        return {'end': 'contra', 'at': c if m < 0 else m, 'steps': [[c, c if m < 0 else m, k]]}
+    steps, queue = [], []
+
+    def place(i, kk):
+        j = mir[kk][i]
+        own[i] = own[j] = kk
+        sv._keep_only(cand, i, kk, queue)
+        sv._keep_only(cand, j, kk, queue)
+        steps.append([i, j, kk])
+        return {i, j} | set(nbrs[i]) | set(nbrs[j])
+
+    near, dmaps, old = place(c, k), {}, set()
+    while True:
+        bad = _eliminate_at(sv, cand, queue, set())
+        if bad >= 0:
+            return {'end': 'contra', 'at': bad, 'steps': steps}
+        if all(o >= 0 for o in own):
+            return {'end': 'solved', 'at': -1, 'steps': steps}
+        pairs = sv._singles(own, cand)
+        if not pairs:
+            return {'end': 'stuck', 'at': -1, 'steps': steps}
+        # continue next to the last placement when something there is forced, as _walk does
+        pool = {p: i for p, i in pairs.items()
+                if p not in old and (i in near or mir[p[1]][i] in near)} or pairs
+        best = None
+        for (_, kk), i in pool.items():
+            if kk not in dmaps:
+                dmaps[kk] = sv._dist_map(own, kk)
+            d = min(dmaps[kk][i], dmaps[kk][mir[kk][i]])
+            if best is None or d < best[0]:
+                best = (d, i, kk)
+        _, i, kk = best
+        if not cand[mir[kk][i]] >> kk & 1:
+            return {'end': 'contra', 'at': mir[kk][i], 'steps': steps}
+        old = set(pairs)
+        near = place(i, kk)
+        dmaps.pop(kk, None)
+
+
+def replay_data(log: dict) -> dict:
+    """Everything the local replay page (web/replay.html) shows: the puzzle, the events, and
+    for each paint stroke the solver's view of the board just before it: per painted cell a
+    verdict (basic / trial / wrong / stuck); for the others, the colors basic deduction
+    leaves open there and, for each wrong one, the solver's way to a contradiction."""
+    R, C = log['R'], log['C']
+    pz = puzzle_for(log['code'])
+    O = pz.owner
+    sv = Solver(R, C, pz.dots)
+    strokes, cache = {}, {}
+    for ei, t, gap, cells, known, before, after in color_moves(log, pz):
+        cells = [c for c in cells if c not in known]
+        if not cells:
+            continue
+        if known not in cache:
+            when, _ = _verdicts(sv, O, known)
+            own, cand, queue, dirty = sv._initial()
+            for i in known:
+                own[i] = O[i]
+                sv._keep_only(cand, i, O[i], queue)
+            sv._settle(own, cand, queue, dirty, 0)
+            cache[known] = (when, own, cand)
+        when, own, cand = cache[known]
+        out = []
+        for c in cells:
+            k = after[c]
+            item = {'cell': c, 'color': k, 'answer': O[c]}
+            if k != O[c]:
+                item['verdict'] = 'wrong'
+            elif c not in when:
+                item['verdict'] = 'stuck'
+            elif not when[c]:
+                item['verdict'] = 'basic'
+            else:
+                item['verdict'] = 'trial'
+                item['depths'] = when[c]
+            if item['verdict'] != 'basic':
+                item['open'] = [j for j in range(sv.D) if cand[c] >> j & 1]
+                item['chains'] = {j: trial_chain(sv, own, cand, c, j) for j in item['open'] if j != O[c]}
+            out.append(item)
+        strokes[ei] = {'gap': gap, 'cells': out,
+                       'basic': [i for i in range(R * C) if own[i] >= 0 and i not in known]}
+    return {'code': log['code'], 'who': log.get('who', ''), 'R': R, 'C': C,
+            'dots': [list(d) for d in pz.dots], 'owner': list(O), 'assist': log['assist'],
+            'ev': log['ev'], 'strokes': strokes}
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -319,7 +445,17 @@ def main():
     m.add_argument('--all', action='store_true', help='list basic strokes too')
     n = sub.add_parser('seen', help='wait before strokes against how open the cell looked')
     n.add_argument('file')
+    r = sub.add_parser('replay', help='data for the local replay page, into web/replays/')
+    r.add_argument('files', nargs='+')
     args = ap.parse_args()
+    if args.cmd == 'replay':
+        REPLAY_DIR.mkdir(exist_ok=True)
+        for f in args.files:
+            log = json.loads(Path(f).read_text(encoding='utf-8'))
+            path = REPLAY_DIR / Path(f).name
+            path.write_text(json.dumps(replay_data(log)), encoding='utf-8')
+            print(f'wrote {path}')
+        return
     if args.cmd in ('moves', 'seen'):
         log = json.loads(Path(args.file).read_text(encoding='utf-8'))
         print(moves_report(log, args.all) if args.cmd == 'moves' else seen_report(log))

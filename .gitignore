@@ -11,3 +11,6 @@ web/public/py/
 .DS_Store
 Thumbs.db
 .vscode/
+
+# local replay data (python logtool.py replay)
+web/replays/
