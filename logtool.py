@@ -17,7 +17,7 @@ import sys
 import zlib
 from pathlib import Path
 
-from galaxy import GENERATOR_VERSION, Solver, generate_sim
+from galaxy import GENERATOR_VERSION, Board, Solver, generate_sim
 
 LOG_DIR = Path(__file__).parent / 'data' / 'logs'
 
@@ -58,6 +58,9 @@ def summary(log: dict) -> str:
     R, C = log['R'], log['C']
     pz = puzzle_for(log['code'])
     sol = solution_walls(R, C, pz.owner)
+    # a dot's own cells: with auto-mirror on they show its color whatever paint is under them
+    cores = {i for d in pz.dots for i in Board(R, C).core(d)}
+    mirror_on = log['assist'].get('mirror')
     walls = [0] * len(sol)
     paint = [-1] * (R * C)
     out = [f"{log['code']}  {R}x{C}  device {log['device']}  assists at start {log['assist']}"]
@@ -77,6 +80,7 @@ def summary(log: dict) -> str:
         elif kind == 'solved':
             solved_at = t
         elif kind == 'assist':
+            mirror_on = data.get('mirror')
             out.append(f'  {fmt(t)}  assists -> {data}')
         if not isinstance(data, dict):
             continue
@@ -94,6 +98,8 @@ def summary(log: dict) -> str:
                 del wrong_since[key]
         for cell, k in data.get('p', []):
             paint[cell] = k
+            if mirror_on and cell in cores:
+                continue
             key = ('p', cell)
             if k >= 0 and k != pz.owner[cell]:
                 wrong_since[key] = t
