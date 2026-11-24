@@ -207,6 +207,16 @@ export default function App() {
   // A stroke is judged when the finger lifts: passing through a solved board mid-drag doesn't
   // count, and the rest of that stroke can't be cut off.
   const solved = !!info?.solved && !dragging
+  // A board solved by painting may lack some lines: once solved, show every border between
+  // colors (and only those), whatever the player drew. The saved walls stay as they were.
+  const shownWalls = useMemo(() => {
+    if (!solved) return walls
+    const { C, owner } = puzzle
+    return {
+      v: walls.v.map((_, idx) => +(owner[Math.floor(idx / (C - 1)) * C + idx % (C - 1)] !== owner[Math.floor(idx / (C - 1)) * C + idx % (C - 1) + 1])),
+      h: walls.h.map((_, idx) => +(owner[idx] !== owner[idx + C])),
+    }
+  }, [solved, walls, puzzle])
 
   // Play the clear animation once, when an unsolved board becomes solved. Loading a solved
   // save, switching themes or re-rendering must not replay it.
@@ -729,7 +739,7 @@ export default function App() {
 
       <div className="board-wrap">
         {puzzle && info && shownMemo ? (
-          <Board puzzle={puzzle} walls={walls} memo={shownMemo} info={info} hues={hues} dark={dark} tool={tool}
+          <Board puzzle={puzzle} walls={shownWalls} memo={shownMemo} info={info} hues={hues} dark={dark} tool={tool}
             selected={selected} busy={busy} celebrating={celebrating} covered={covered} svgRef={svgRef}
             handlers={{ onPointerDown, onPointerMove, onPointerUp, onPointerCancel }} />
         ) : (
