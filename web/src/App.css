@@ -8,12 +8,12 @@
 }
 
 /* ---------------------------------------------------------------- header */
+/* top row: the title, and the app-wide buttons (assists, theme) at its right */
 .header {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  flex-wrap: wrap;
 }
 
 .title {
@@ -364,13 +364,20 @@ kbd {
   border-radius: 4px;
 }
 
+/* ---------------------------------------------------------------- size and difficulty */
+/* under the title: sizes at the left, the levels that size offers at the right; on phones
+   two full-width rows (the phone rules below come after this, so they win) */
+.pickers { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+
 /* Phones: every row spans the board's width so the column reads as one block. */
 @media (max-width: 480px) {
   /* the controls get their own row under the title: span it, sizes share the room */
-  .header-controls { gap: 8px; width: 100%; }
-  .header .pickers { flex: 1; }
-  .header .segmented button { padding: 6px 10px; flex: 1; justify-content: center; }
+  .header-controls { gap: 8px; }
   .header .icon-button { width: 36px; height: 36px; }
+  /* sizes and levels each take a full-width row */
+  .pickers { flex-direction: column; align-items: stretch; gap: 6px; }
+  .pickers .segmented { display: flex; }
+  .pickers .segmented button { padding: 6px 10px; flex: 1; justify-content: center; }
   /* tools and actions each span the width too, so the New puzzle menu (which hangs from the
      right end of its button) stays on screen */
   .toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
@@ -382,14 +389,8 @@ kbd {
   .hint { display: none; }
 }
 @media (max-width: 360px) {
-  .header .segmented button { padding: 6px 8px; font-size: 0.88rem; }
+  .pickers .segmented button { padding: 6px 8px; font-size: 0.88rem; }
   .header-controls { gap: 6px; }
   .actions .text-button { white-space: nowrap; padding: 10px 4px; font-size: 0.9rem; }
 }
 
-/* ---------------------------------------------------------------- size and difficulty */
-/* two rows of the same width: sizes, then the levels that size offers (they share the row) */
-.pickers { display: flex; flex-direction: column; gap: 6px; }
-.pickers .segmented { display: flex; }
-.pickers .segmented button { flex: 1; justify-content: center; }
-.header-controls { align-items: flex-start; }
