@@ -56,6 +56,19 @@ function requestPuzzle(n, seed = null, level = null) {
   })
 }
 
+// the tier of a puzzle on screen (galaxy.tier), asked of the worker for puzzles that lack it
+function requestTier(pz) {
+  return new Promise((resolve, reject) => {
+    const id = ++reqId
+    pending.set(id, { resolve: (r) => resolve(r.tier), reject })
+    getWorker().postMessage({ id, tierOf: { R: pz.R, C: pz.C, dots: pz.dots } })
+  })
+}
+
+// the level of this size that a tier falls under (7x7 Hard takes both hard and expert)
+const levelOfTier = (n, tier) =>
+  (tier ? Object.entries(LEVELS[n] ?? {}).find(([, [, tiers]]) => tiers.includes(tier))?.[0] ?? null : null)
+
 function loadLevels() {
   const out = Object.fromEntries(SIZES.map(n => [n, 'n']))
   try {
@@ -189,12 +202,27 @@ export default function App() {
   useEffect(() => { document.documentElement.dataset.theme = theme }, [theme])
 
   // saved once per second of play at most (elapsedSec), and on every move
+  // The tier of the puzzle on screen. New puzzles come with it; older ones (saves and codes
+  // from before levels) ask the worker once. It is kept beside the puzzle, not in it: a new
+  // puzzle object would restart the log and the auto-mirror frame.
+  const [tierInfo, setTierInfo] = useState(null) // { puzzle, tier }
+  const tier = puzzle ? (puzzle.tier ?? (tierInfo?.puzzle === puzzle ? tierInfo.tier : null)) : null
+  useEffect(() => {
+    if (!puzzle || puzzle.tier) return
+    let live = true
+    requestTier(puzzle).then(t => { if (live) setTierInfo({ puzzle, tier: t }) }).catch(() => {})
+    return () => { live = false }
+  }, [puzzle])
+  // the level the puzzle counts as: its code's, or the one its tier falls under
+  const shownLevel = puzzle ? (puzzle.level ?? levelOfTier(puzzle.R, tier)) : null
+
   const elapsedSec = Math.floor(elapsed / 1000)
   useEffect(() => {
     if (puzzle && walls && paint && memo && candOff) {
-      storage.set(saveKey(puzzle.R), JSON.stringify({ puzzle, walls, paint, memo, candOff, log, elapsed: elapsedSec * 1000 }))
+      const saved = tier && !puzzle.tier ? { ...puzzle, tier } : puzzle
+      storage.set(saveKey(puzzle.R), JSON.stringify({ puzzle: saved, walls, paint, memo, candOff, log, elapsed: elapsedSec * 1000 }))
     }
-  }, [puzzle, walls, paint, memo, candOff, log, elapsedSec])
+  }, [puzzle, tier, walls, paint, memo, candOff, log, elapsedSec])
 
   const hues = useMemo(() => (puzzle ? assignHues(puzzle.dots) : []), [puzzle])
   const blocked = useMemo(() => (puzzle ? blockedWalls(puzzle.R, puzzle.C, puzzle.dots) : null), [puzzle])
@@ -787,7 +815,7 @@ export default function App() {
       <div className={`status-row${solved && !busy ? ' is-solved' : ''}`} ref={shareRef}>
         <p className="status" role="status">{puzzle ? status : ''}</p>
         <div className="status-meta">
-          {puzzle?.level && <span className="level-tag">{levelLabel(puzzle.R, puzzle.level)}</span>}
+          {shownLevel && <span className="level-tag">{levelLabel(puzzle.R, shownLevel)}</span>}
           {code && (
             <button className="code-button" onClick={toggleShare}
               aria-expanded={shareOpen} aria-label={`Puzzle code ${code}. Share this puzzle`}>
@@ -873,7 +901,7 @@ export default function App() {
                   <p className="share-label">Random {size} × {size} puzzle</p>
                   <div className="level-row" role="group" aria-label="Difficulty">
                     {Object.entries(LEVELS[size] ?? {}).map(([letter, [label]]) => (
-                      <button key={letter} className={`text-button${levels[size] === letter ? ' is-primary' : ''}`}
+                      <button key={letter} className={`text-button${shownLevel === letter && puzzle?.R === size ? ' is-primary' : ''}`}
                         onClick={() => startRandom(letter)} disabled={busy}>{label}</button>
                     ))}
                   </div>
