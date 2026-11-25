@@ -69,6 +69,16 @@ function requestTier(pz) {
 const levelOfTier = (n, tier) =>
   (tier ? Object.entries(LEVELS[n] ?? {}).find(([, [, tiers]]) => tiers.includes(tier))?.[0] ?? null : null)
 
+// Does code (seed, level) stand for puzzle pz? An older code (no level) and the code with the
+// letter of the puzzle's own tier give the same puzzle: both take the first puzzle with one
+// solution drawn from the seed. `tier`: pz's tier when known (a save stores it).
+function codeMatches(pz, seed, level, version, tier = pz.tier) {
+  if (pz.seed !== seed || (pz.v ?? 1) !== version) return false
+  const mine = pz.level ?? null
+  if (mine === level) return true
+  return mine === null && level !== null && levelOfTier(pz.R, tier ?? null) === level
+}
+
 function loadLevels() {
   const out = Object.fromEntries(SIZES.map(n => [n, 'n']))
   try {
@@ -312,7 +322,9 @@ export default function App() {
     applyPuzzle(pz, st.walls, st.paint, st.memo, st.elapsed)
   }, [])
 
-  const generate = useCallback(async (n, seed = null, state = null, level = null) => {
+  // `keep`: a save that may hold this very puzzle (its tier wasn't known, so the code couldn't
+  // be matched); if the new puzzle is the same, the save is carried on instead.
+  const generate = useCallback(async (n, seed = null, state = null, level = null, keep = null, confirmed = true) => {
     const token = ++genToken.current
     setBusy(true)
     setGenLevel(level)
@@ -321,7 +333,12 @@ export default function App() {
       const pz = await requestPuzzle(n, seed, level)
       if (token !== genToken.current) return // superseded by a newer request
       const pzv = { ...pz, v: GEN_VERSION }
-      if (state) await openShared(pzv, null, state, true, token)
+      const same = keep && JSON.stringify(keep.puzzle.dots) === JSON.stringify(pz.dots)
+      if (same) {
+        const kept = { ...keep.puzzle, tier: pz.tier }
+        if (state) await openShared(kept, keep, state, confirmed, token)
+        else applyPuzzle(kept, keep.walls, keep.paint, keep.memo, keep.elapsed, keep.candOff, keep.log)
+      } else if (state) await openShared(pzv, null, state, true, token)
       else applyPuzzle(pzv, emptyWalls(n, n), Array(n * n).fill(-1), emptyMemo(n * n))
       setWarm(true)
     } catch {
@@ -337,8 +354,7 @@ export default function App() {
     storage.set(LAST_SIZE_KEY, String(n))
     setNotice('')
     const saved = loadSave(n)
-    const savedMatches = saved && (seed === null ||
-      (saved.puzzle.seed === seed && (saved.puzzle.v ?? 1) === GEN_VERSION && (saved.puzzle.level ?? null) === level))
+    const savedMatches = saved && (seed === null || codeMatches(saved.puzzle, seed, level, GEN_VERSION))
     if (savedMatches) {
       const token = ++genToken.current // drop any generation still in flight
       setBusy(false)
@@ -347,7 +363,9 @@ export default function App() {
     } else {
       setPuzzle(null)
       // a code gives its own level (none for older codes); otherwise the one last chosen
-      generate(n, seed, seed !== null ? state : null, seed !== null ? level : levelsRef.current[n])
+      const unsure = saved && seed !== null && !saved.puzzle.tier && saved.puzzle.seed === seed // see generate
+      generate(n, seed, seed !== null ? state : null, seed !== null ? level : levelsRef.current[n],
+        unsure ? saved : null, confirmed)
     }
     getWorker() // warm Pyodide up even when a saved game was restored
   }, [request, generate, openShared])
@@ -644,7 +662,10 @@ export default function App() {
   }
 
   // ---------------------------------------------------------------- sharing
-  const code = puzzle && Number.isInteger(puzzle.seed) ? formatCode(puzzle.v ?? 1, puzzle.R, puzzle.seed, puzzle.level) : ''
+  // Older puzzles (no level) are shared with the letter of their tier once it is known: the
+  // same seed with that letter gives the same puzzle (see codeMatches).
+  const code = puzzle && Number.isInteger(puzzle.seed)
+    ? formatCode(puzzle.v ?? 1, puzzle.R, puzzle.seed, puzzle.level ?? shownLevel) : ''
   const link = code ? shareLink(code) : ''
 
   // panels close on a press anywhere outside them
@@ -709,15 +730,13 @@ export default function App() {
     e.preventDefault()
     const p = parseCode(codeInput, codeOptions)
     if (!p.ok) { setNewError(codeError[p.reason]); return }
-    const same = puzzle && puzzle.R === p.size && puzzle.seed === p.seed && (puzzle.v ?? 1) === p.version &&
-      (puzzle.level ?? null) === p.level
+    const same = puzzle && puzzle.R === p.size && codeMatches(puzzle, p.seed, p.level, p.version, tier)
     if (!same || p.state) {
       // the same size replaces the board on screen, which the menu already warns about
       if (p.size !== size) {
         const saved = loadSave(p.size)
         const savedUnfinished = saved && hasProgress(saved) && !isSolved(saved.puzzle, saved.walls, saved.paint)
-        const differs = saved && !(saved.puzzle.seed === p.seed && (saved.puzzle.v ?? 1) === p.version &&
-          (saved.puzzle.level ?? null) === p.level)
+        const differs = saved && !codeMatches(saved.puzzle, p.seed, p.level, p.version)
         if (savedUnfinished && (differs || p.state) &&
           !window.confirm(`Opening this code replaces your unfinished ${p.size} \u00d7 ${p.size} puzzle.`)) return
       }
