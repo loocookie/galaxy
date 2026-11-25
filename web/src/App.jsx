@@ -8,7 +8,9 @@ import { Board, MARGIN, starColor } from './BoardView.jsx'
 import './App.css'
 
 const SIZES = [7, 10, 15]
-const saveKey = (n) => `galaxy_${n}x${n}`
+// one saved game per size and level; before levels (2026-11-25) there was one per size
+const saveKey = (n, level) => `galaxy_${n}x${n}_${level}`
+const legacyKey = (n) => `galaxy_${n}x${n}`
 const LAST_SIZE_KEY = 'galaxy_last_size'
 const ASSIST_KEY = 'galaxy_assist'
 const LEVEL_KEY = 'galaxy_level' // the difficulty last chosen per size
@@ -22,6 +24,7 @@ const codeOptions = { version: GEN_VERSION, sizes: SIZES, levels: LEVELS }
 const storage = {
   get(key) { try { return localStorage.getItem(key) } catch { return null } },
   set(key, value) { try { localStorage.setItem(key, value) } catch { /* unavailable */ } },
+  remove(key) { try { localStorage.removeItem(key) } catch { /* unavailable */ } },
 }
 
 // ---------------------------------------------------------------- generator worker (Pyodide)
@@ -116,14 +119,45 @@ function loadAssist() {
   } catch { return { mirror: false, cands: false } }
 }
 
-function loadSave(n) {
+function readSave(key, n) {
   try {
-    const s = JSON.parse(storage.get(saveKey(n)))
+    const s = JSON.parse(storage.get(key))
     if (s?.puzzle?.R === n && s.puzzle.C === n && s.walls && s.paint) {
       return { ...s, memo: cellList(s.memo, n * n), candOff: cellList(s.candOff, n * n), elapsed: Number.isFinite(s.elapsed) && s.elapsed > 0 ? s.elapsed : 0 }
     }
   } catch { /* corrupt save */ }
   return null
+}
+const loadSave = (n, level) => readSave(saveKey(n, level), n)
+
+// The one save per size from before levels moves to its level's slot (once). A save that
+// doesn't know its tier yet asks the worker; a slot already in use wins over it. Resolves to
+// the level it moved to (the game the player had open), or null.
+const migrating = new Map()
+function migrateLegacy(n) {
+  if (!migrating.has(n)) {
+    migrating.set(n, (async () => {
+      const old = readSave(legacyKey(n), n)
+      if (!old) return null
+      let level = old.puzzle.level ?? levelOfTier(n, old.puzzle.tier ?? null)
+      if (!level) {
+        try { old.puzzle = { ...old.puzzle, tier: await requestTier(old.puzzle) } } catch { return null }
+        level = levelOfTier(n, old.puzzle.tier)
+      }
+      if (!level) return null
+      if (!storage.get(saveKey(n, level))) storage.set(saveKey(n, level), JSON.stringify(old))
+      storage.remove(legacyKey(n))
+      return level
+    })().then(level => {
+      migrating.set(n, Promise.resolve(null)) // only the first opening goes to the moved game
+      return level
+    }))
+  }
+  return migrating.get(n)
+}
+const needsMigration = (n) => {
+  const old = readSave(legacyKey(n), n)
+  return !!old && !(old.puzzle.level ?? levelOfTier(n, old.puzzle.tier ?? null))
 }
 
 function formatTime(ms) {
@@ -143,10 +177,11 @@ export default function App() {
   const [request, setRequest] = useState(() => {
     if (LINK?.ok) return { size: LINK.size, seed: LINK.seed, level: LINK.level, state: LINK.state }
     const n = Number(storage.get(LAST_SIZE_KEY))
-    return { size: SIZES.includes(n) ? n : 10, seed: null }
+    const size = SIZES.includes(n) ? n : 10
+    return { size, seed: null, level: loadLevels()[size] }
   })
   const size = request.size
-  const [levels, setLevels] = useState(loadLevels) // difficulty for new puzzles, per size
+  const [levels, setLevels] = useState(loadLevels) // the level last shown, per size
   const levelsRef = useRef(levels)
   levelsRef.current = levels
   const [genLevel, setGenLevel] = useState(null) // the level being generated, for the status line
@@ -226,13 +261,18 @@ export default function App() {
   // the level the puzzle counts as: its code's, or the one its tier falls under
   const shownLevel = puzzle ? (puzzle.level ?? levelOfTier(puzzle.R, tier)) : null
 
+  // the size's level follows the puzzle on screen, so switching sizes comes back to it
+  useEffect(() => {
+    if (puzzle && shownLevel) setLevels(l => (l[puzzle.R] === shownLevel ? l : { ...l, [puzzle.R]: shownLevel }))
+  }, [puzzle, shownLevel])
+
   const elapsedSec = Math.floor(elapsed / 1000)
   useEffect(() => {
-    if (puzzle && walls && paint && memo && candOff) {
+    if (puzzle && walls && paint && memo && candOff && shownLevel) {
       const saved = tier && !puzzle.tier ? { ...puzzle, tier } : puzzle
-      storage.set(saveKey(puzzle.R), JSON.stringify({ puzzle: saved, walls, paint, memo, candOff, log, elapsed: elapsedSec * 1000 }))
+      storage.set(saveKey(puzzle.R, shownLevel), JSON.stringify({ puzzle: saved, walls, paint, memo, candOff, log, elapsed: elapsedSec * 1000 }))
     }
-  }, [puzzle, tier, walls, paint, memo, candOff, log, elapsedSec])
+  }, [puzzle, tier, shownLevel, walls, paint, memo, candOff, log, elapsedSec])
 
   const hues = useMemo(() => (puzzle ? assignHues(puzzle.dots) : []), [puzzle])
   const blocked = useMemo(() => (puzzle ? blockedWalls(puzzle.R, puzzle.C, puzzle.dots) : null), [puzzle])
@@ -322,9 +362,7 @@ export default function App() {
     applyPuzzle(pz, st.walls, st.paint, st.memo, st.elapsed)
   }, [])
 
-  // `keep`: a save that may hold this very puzzle (its tier wasn't known, so the code couldn't
-  // be matched); if the new puzzle is the same, the save is carried on instead.
-  const generate = useCallback(async (n, seed = null, state = null, level = null, keep = null, confirmed = true) => {
+  const generate = useCallback(async (n, seed = null, state = null, level = null) => {
     const token = ++genToken.current
     setBusy(true)
     setGenLevel(level)
@@ -333,12 +371,7 @@ export default function App() {
       const pz = await requestPuzzle(n, seed, level)
       if (token !== genToken.current) return // superseded by a newer request
       const pzv = { ...pz, v: GEN_VERSION }
-      const same = keep && JSON.stringify(keep.puzzle.dots) === JSON.stringify(pz.dots)
-      if (same) {
-        const kept = { ...keep.puzzle, tier: pz.tier }
-        if (state) await openShared(kept, keep, state, confirmed, token)
-        else applyPuzzle(kept, keep.walls, keep.paint, keep.memo, keep.elapsed, keep.candOff, keep.log)
-      } else if (state) await openShared(pzv, null, state, true, token)
+      if (state) await openShared(pzv, null, state, true, token)
       else applyPuzzle(pzv, emptyWalls(n, n), Array(n * n).fill(-1), emptyMemo(n * n))
       setWarm(true)
     } catch {
@@ -348,26 +381,39 @@ export default function App() {
     }
   }, [openShared])
 
-  // open the requested game: the saved one for this size (if it matches), or generate
+  // Open the requested game: the saved one in its (size, level) slot if it matches, or generate.
+  // A code without a level (older codes) is matched against every slot of its size; if none
+  // holds it, the new puzzle lands in the slot of its tier.
   useEffect(() => {
     const { size: n, seed, level = null, state = null, confirmed = false } = request
     storage.set(LAST_SIZE_KEY, String(n))
     setNotice('')
-    const saved = loadSave(n)
-    const savedMatches = saved && (seed === null || codeMatches(saved.puzzle, seed, level, GEN_VERSION))
-    if (savedMatches) {
-      const token = ++genToken.current // drop any generation still in flight
-      setBusy(false)
-      if (state && seed !== null) openShared(saved.puzzle, saved, state, confirmed, token)
-      else applyPuzzle(saved.puzzle, saved.walls, saved.paint, saved.memo, saved.elapsed, saved.candOff, saved.log)
-    } else {
-      setPuzzle(null)
-      // a code gives its own level (none for older codes); otherwise the one last chosen
-      const unsure = saved && seed !== null && !saved.puzzle.tier && saved.puzzle.seed === seed // see generate
-      generate(n, seed, seed !== null ? state : null, seed !== null ? level : levelsRef.current[n],
-        unsure ? saved : null, confirmed)
+    getWorker() // warm Pyodide up even when a saved game is restored
+    let live = true
+    const token = ++genToken.current // drop any generation still in flight
+    const open = (moved) => {
+      // just after the old save moved, show it: it is the game the player had open
+      const slots = seed === null ? [moved ?? level ?? levelsRef.current[n]]
+        : level ? [level] : Object.keys(LEVELS[n] ?? {})
+      const saved = slots.map(l => loadSave(n, l))
+        .find(sv => sv && (seed === null || codeMatches(sv.puzzle, seed, level, GEN_VERSION)))
+      if (saved) {
+        setBusy(false)
+        if (state && seed !== null) openShared(saved.puzzle, saved, state, confirmed, token)
+        else applyPuzzle(saved.puzzle, saved.walls, saved.paint, saved.memo, saved.elapsed, saved.candOff, saved.log)
+      } else {
+        setPuzzle(null)
+        generate(n, seed, seed !== null ? state : null, seed !== null ? level : slots[0])
+      }
     }
-    getWorker() // warm Pyodide up even when a saved game was restored
+    if (needsMigration(n)) {
+      // an old save whose level isn't known yet: the worker tells, then it opens
+      setPuzzle(null)
+      setBusy(true)
+      setGenLevel(null)
+    }
+    migrateLegacy(n).then(moved => { if (live && token === genToken.current) open(moved) })
+    return () => { live = false }
   }, [request, generate, openShared])
 
   // Timer: runs while an unsolved puzzle is on screen and the tab is visible.
@@ -720,10 +766,9 @@ export default function App() {
     }
   }
 
-  const startRandom = (level) => {
+  const startRandom = () => {
     setNewOpen(false)
-    setLevels(l => ({ ...l, [size]: level }))
-    generate(size, null, null, level)
+    generate(size, null, null, activeLevel)
   }
 
   const openCode = (e) => {
@@ -734,7 +779,7 @@ export default function App() {
     if (!same || p.state) {
       // the same size replaces the board on screen, which the menu already warns about
       if (p.size !== size) {
-        const saved = loadSave(p.size)
+        const saved = p.level ? loadSave(p.size, p.level) : null
         const savedUnfinished = saved && hasProgress(saved) && !isSolved(saved.puzzle, saved.walls, saved.paint)
         const differs = saved && !codeMatches(saved.puzzle, p.seed, p.level, p.version)
         if (savedUnfinished && (differs || p.state) &&
@@ -746,6 +791,9 @@ export default function App() {
     setCodeInput('')
     setNewOpen(false)
   }
+
+  // the level button lit in the header: the puzzle's, or the one being opened
+  const activeLevel = shownLevel ?? request.level ?? levels[size]
 
   // ---------------------------------------------------------------- render
   let status = ''
@@ -762,10 +810,19 @@ export default function App() {
       <header className="header">
         <h1 className="title">Galaxy</h1>
         <div className="header-controls">
-          <div className="segmented" role="group" aria-label="Board size">
-            {SIZES.map(n => (
-              <button key={n} aria-pressed={size === n} onClick={() => setRequest({ size: n, seed: null })}>{n} × {n}</button>
-            ))}
+          <div className="pickers">
+            <div className="segmented" role="group" aria-label="Board size">
+              {SIZES.map(n => (
+                <button key={n} aria-pressed={size === n}
+                  onClick={() => setRequest({ size: n, seed: null, level: levels[n] })}>{n} × {n}</button>
+              ))}
+            </div>
+            <div className="segmented level-picker" role="group" aria-label="Difficulty">
+              {Object.entries(LEVELS[size] ?? {}).map(([letter, [label]]) => (
+                <button key={letter} aria-pressed={activeLevel === letter}
+                  onClick={() => { if (letter !== activeLevel) setRequest({ size, seed: null, level: letter }) }}>{label}</button>
+              ))}
+            </div>
           </div>
           <div className="settings-wrap" ref={settingsRef}>
             <button className="icon-button" onClick={() => setSettingsOpen(o => !o)} aria-expanded={settingsOpen}
@@ -834,7 +891,6 @@ export default function App() {
       <div className={`status-row${solved && !busy ? ' is-solved' : ''}`} ref={shareRef}>
         <p className="status" role="status">{puzzle ? status : ''}</p>
         <div className="status-meta">
-          {shownLevel && <span className="level-tag">{levelLabel(puzzle.R, shownLevel)}</span>}
           {code && (
             <button className="code-button" onClick={toggleShare}
               aria-expanded={shareOpen} aria-label={`Puzzle code ${code}. Share this puzzle`}>
@@ -917,13 +973,9 @@ export default function App() {
             {newOpen && (
               <div className="share-panel new-panel" role="dialog" aria-label="Start a new puzzle">
                 <div className="share-block">
-                  <p className="share-label">Random {size} × {size} puzzle</p>
-                  <div className="level-row" role="group" aria-label="Difficulty">
-                    {Object.entries(LEVELS[size] ?? {}).map(([letter, [label]]) => (
-                      <button key={letter} className={`text-button${shownLevel === letter && puzzle?.R === size ? ' is-primary' : ''}`}
-                        onClick={() => startRandom(letter)} disabled={busy}>{label}</button>
-                    ))}
-                  </div>
+                  <button className="text-button is-primary" onClick={startRandom} disabled={busy}>
+                    Random {levelLabel(size, activeLevel)} {size} × {size} puzzle
+                  </button>
                   {unfinished && <p className="share-label">This puzzle isn’t solved yet. Starting another one replaces it.</p>}
                 </div>
                 <form className="share-block" onSubmit={openCode}>
