@@ -8,13 +8,23 @@
 }
 
 /* ---------------------------------------------------------------- header */
-/* top row: the title, and the app-wide buttons (assists, theme) at its right */
+/* The title alone on top; under it one row, spread evenly: sizes, levels, app buttons.
+   It needs about 590px (sizes ~235, levels ~222, buttons ~92); narrower screens switch to the
+   layout below (title and app buttons, then sizes and levels in full-width rows). */
 .header {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: auto auto auto;
+  grid-template-areas: "title title title" "size level tools";
   justify-content: space-between;
-  gap: 16px;
+  align-items: center;
+  gap: 16px 12px;
 }
+.title { grid-area: title; }
+.size-picker { grid-area: size; }
+/* as wide as three levels even where a size offers two (7x7), so the row holds still */
+.level-picker { grid-area: level; min-width: 224px; }
+.level-picker button { flex: 1; justify-content: center; }
+.header-controls { grid-area: tools; }
 
 .title {
   margin: 0;
@@ -364,20 +374,25 @@ kbd {
   border-radius: 4px;
 }
 
-/* ---------------------------------------------------------------- size and difficulty */
-/* under the title: sizes at the left, the levels that size offers at the right; on phones
-   two full-width rows (the phone rules below come after this, so they win) */
-.pickers { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* ---------------------------------------------------------------- narrow header */
+@media (max-width: 620px) {
+  .header {
+    grid-template-columns: 1fr auto;
+    grid-template-areas: "title tools" "size size" "level level";
+    justify-content: stretch;
+    gap: 6px 12px;
+  }
+  .size-picker { margin-top: 10px; }
+  .size-picker, .level-picker { display: flex; }
+  .size-picker button, .level-picker button { flex: 1; justify-content: center; }
+}
 
 /* Phones: every row spans the board's width so the column reads as one block. */
 @media (max-width: 480px) {
   /* the controls get their own row under the title: span it, sizes share the room */
   .header-controls { gap: 8px; }
   .header .icon-button { width: 36px; height: 36px; }
-  /* sizes and levels each take a full-width row */
-  .pickers { flex-direction: column; align-items: stretch; gap: 6px; }
-  .pickers .segmented { display: flex; }
-  .pickers .segmented button { padding: 6px 10px; flex: 1; justify-content: center; }
+  .size-picker button, .level-picker button { padding: 6px 10px; }
   /* tools and actions each span the width too, so the New puzzle menu (which hangs from the
      right end of its button) stays on screen */
   .toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
@@ -389,7 +404,7 @@ kbd {
   .hint { display: none; }
 }
 @media (max-width: 360px) {
-  .pickers .segmented button { padding: 6px 8px; font-size: 0.88rem; }
+  .size-picker button, .level-picker button { padding: 6px 8px; font-size: 0.88rem; }
   .header-controls { gap: 6px; }
   .actions .text-button { white-space: nowrap; padding: 10px 4px; font-size: 0.9rem; }
 }

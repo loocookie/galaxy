@@ -809,6 +809,20 @@ export default function App() {
     <main className="app">
       <header className="header">
         <h1 className="title">Galaxy</h1>
+        {/* what to play: wide screens put sizes, levels and the app buttons in one row under the
+            title; narrow ones put the app buttons beside the title and sizes, levels in rows */}
+        <div className="segmented size-picker" role="group" aria-label="Board size">
+          {SIZES.map(n => (
+            <button key={n} aria-pressed={size === n}
+              onClick={() => setRequest({ size: n, seed: null, level: levels[n] })}>{n} × {n}</button>
+          ))}
+        </div>
+        <div className="segmented level-picker" role="group" aria-label="Difficulty">
+          {Object.entries(LEVELS[size] ?? {}).map(([letter, [label]]) => (
+            <button key={letter} aria-pressed={activeLevel === letter}
+              onClick={() => { if (letter !== activeLevel) setRequest({ size, seed: null, level: letter }) }}>{label}</button>
+          ))}
+        </div>
         <div className="header-controls">
           <div className="settings-wrap" ref={settingsRef}>
             <button className="icon-button" onClick={() => setSettingsOpen(o => !o)} aria-expanded={settingsOpen}
@@ -852,22 +866,6 @@ export default function App() {
           </button>
         </div>
       </header>
-
-      {/* what to play: sizes, then the levels of that size (one row on wide screens) */}
-      <nav className="pickers" aria-label="Puzzle">
-        <div className="segmented" role="group" aria-label="Board size">
-          {SIZES.map(n => (
-            <button key={n} aria-pressed={size === n}
-              onClick={() => setRequest({ size: n, seed: null, level: levels[n] })}>{n} × {n}</button>
-          ))}
-        </div>
-        <div className="segmented level-picker" role="group" aria-label="Difficulty">
-          {Object.entries(LEVELS[size] ?? {}).map(([letter, [label]]) => (
-            <button key={letter} aria-pressed={activeLevel === letter}
-              onClick={() => { if (letter !== activeLevel) setRequest({ size, seed: null, level: letter }) }}>{label}</button>
-          ))}
-        </div>
-      </nav>
 
       <div className="board-wrap">
         {puzzle && info && shownMemo ? (
