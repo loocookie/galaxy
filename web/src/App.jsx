@@ -11,9 +11,13 @@ const SIZES = [7, 10, 15]
 const saveKey = (n) => `galaxy_${n}x${n}`
 const LAST_SIZE_KEY = 'galaxy_last_size'
 const ASSIST_KEY = 'galaxy_assist'
-/* global __GEN_VERSION__ */
+const LEVEL_KEY = 'galaxy_level' // the difficulty last chosen per size
+/* global __GEN_VERSION__, __LEVELS__ */
 const GEN_VERSION = __GEN_VERSION__ // GENERATOR_VERSION from galaxy.py, injected by vite.config.js
-const codeOptions = { version: GEN_VERSION, sizes: SIZES }
+// difficulty levels per size from galaxy.py (LEVELS_JSON): { size: { letter: [label, tiers] } }
+const LEVELS = __LEVELS__
+const levelLabel = (n, level) => (level ? LEVELS[n]?.[level]?.[0] ?? '' : '')
+const codeOptions = { version: GEN_VERSION, sizes: SIZES, levels: LEVELS }
 
 const storage = {
   get(key) { try { return localStorage.getItem(key) } catch { return null } },
@@ -44,12 +48,21 @@ function getWorker() {
   return worker
 }
 
-function requestPuzzle(n, seed = null) {
+function requestPuzzle(n, seed = null, level = null) {
   return new Promise((resolve, reject) => {
     const id = ++reqId
     pending.set(id, { resolve, reject })
-    getWorker().postMessage({ id, R: n, C: n, seed: seed ?? Math.floor(Math.random() * MAX_SEED) })
+    getWorker().postMessage({ id, R: n, C: n, seed: seed ?? Math.floor(Math.random() * MAX_SEED), level })
   })
+}
+
+function loadLevels() {
+  const out = Object.fromEntries(SIZES.map(n => [n, 'n']))
+  try {
+    const saved = JSON.parse(storage.get(LEVEL_KEY))
+    for (const n of SIZES) if (LEVELS[n]?.[saved?.[n]]) out[n] = saved[n]
+  } catch { /* none yet */ }
+  return out
 }
 
 // A shared link (?p=<code>, maybe &s=<progress>) is read once at startup, then removed from the
@@ -105,11 +118,16 @@ export default function App() {
   // which game to show: a size, plus a seed when opening a shared code (null = saved or random),
   // plus shared progress to start from. `confirmed`: the player already agreed to lose progress.
   const [request, setRequest] = useState(() => {
-    if (LINK?.ok) return { size: LINK.size, seed: LINK.seed, state: LINK.state }
+    if (LINK?.ok) return { size: LINK.size, seed: LINK.seed, level: LINK.level, state: LINK.state }
     const n = Number(storage.get(LAST_SIZE_KEY))
     return { size: SIZES.includes(n) ? n : 10, seed: null }
   })
   const size = request.size
+  const [levels, setLevels] = useState(loadLevels) // difficulty for new puzzles, per size
+  const levelsRef = useRef(levels)
+  levelsRef.current = levels
+  const [genLevel, setGenLevel] = useState(null) // the level being generated, for the status line
+  useEffect(() => { storage.set(LEVEL_KEY, JSON.stringify(levels)) }, [levels])
   const genToken = useRef(0) // only the latest generation request may apply its result
   const [shareOpen, setShareOpen] = useState(false)
   const [shareError, setShareError] = useState('')
@@ -232,7 +250,7 @@ export default function App() {
   // `lg`: the saved log to carry on; otherwise a new log starts from this board
   const applyPuzzle = (pz, w, p, mm, el = 0, off = null, lg = null) => {
     const board = { walls: w, paint: p, memo: mm, candOff: off ?? emptyMemo(pz.R * pz.C) }
-    const code = Number.isInteger(pz.seed) ? formatCode(pz.v ?? 1, pz.R, pz.seed) : ''
+    const code = Number.isInteger(pz.seed) ? formatCode(pz.v ?? 1, pz.R, pz.seed, pz.level) : ''
     setStarted(false)
     setElapsed(el)
     setPuzzle(pz)
@@ -266,12 +284,13 @@ export default function App() {
     applyPuzzle(pz, st.walls, st.paint, st.memo, st.elapsed)
   }, [])
 
-  const generate = useCallback(async (n, seed = null, state = null) => {
+  const generate = useCallback(async (n, seed = null, state = null, level = null) => {
     const token = ++genToken.current
     setBusy(true)
+    setGenLevel(level)
     setError('')
     try {
-      const pz = await requestPuzzle(n, seed)
+      const pz = await requestPuzzle(n, seed, level)
       if (token !== genToken.current) return // superseded by a newer request
       const pzv = { ...pz, v: GEN_VERSION }
       if (state) await openShared(pzv, null, state, true, token)
@@ -286,12 +305,12 @@ export default function App() {
 
   // open the requested game: the saved one for this size (if it matches), or generate
   useEffect(() => {
-    const { size: n, seed, state = null, confirmed = false } = request
+    const { size: n, seed, level = null, state = null, confirmed = false } = request
     storage.set(LAST_SIZE_KEY, String(n))
     setNotice('')
     const saved = loadSave(n)
     const savedMatches = saved && (seed === null ||
-      (saved.puzzle.seed === seed && (saved.puzzle.v ?? 1) === GEN_VERSION))
+      (saved.puzzle.seed === seed && (saved.puzzle.v ?? 1) === GEN_VERSION && (saved.puzzle.level ?? null) === level))
     if (savedMatches) {
       const token = ++genToken.current // drop any generation still in flight
       setBusy(false)
@@ -299,7 +318,8 @@ export default function App() {
       else applyPuzzle(saved.puzzle, saved.walls, saved.paint, saved.memo, saved.elapsed, saved.candOff, saved.log)
     } else {
       setPuzzle(null)
-      generate(n, seed, seed !== null ? state : null)
+      // a code gives its own level (none for older codes); otherwise the one last chosen
+      generate(n, seed, seed !== null ? state : null, seed !== null ? level : levelsRef.current[n])
     }
     getWorker() // warm Pyodide up even when a saved game was restored
   }, [request, generate, openShared])
@@ -596,7 +616,7 @@ export default function App() {
   }
 
   // ---------------------------------------------------------------- sharing
-  const code = puzzle && Number.isInteger(puzzle.seed) ? formatCode(puzzle.v ?? 1, puzzle.R, puzzle.seed) : ''
+  const code = puzzle && Number.isInteger(puzzle.seed) ? formatCode(puzzle.v ?? 1, puzzle.R, puzzle.seed, puzzle.level) : ''
   const link = code ? shareLink(code) : ''
 
   // panels close on a press anywhere outside them
@@ -651,26 +671,29 @@ export default function App() {
     }
   }
 
-  const startRandom = () => {
+  const startRandom = (level) => {
     setNewOpen(false)
-    generate(size)
+    setLevels(l => ({ ...l, [size]: level }))
+    generate(size, null, null, level)
   }
 
   const openCode = (e) => {
     e.preventDefault()
     const p = parseCode(codeInput, codeOptions)
     if (!p.ok) { setNewError(codeError[p.reason]); return }
-    const same = puzzle && puzzle.R === p.size && puzzle.seed === p.seed && (puzzle.v ?? 1) === p.version
+    const same = puzzle && puzzle.R === p.size && puzzle.seed === p.seed && (puzzle.v ?? 1) === p.version &&
+      (puzzle.level ?? null) === p.level
     if (!same || p.state) {
       // the same size replaces the board on screen, which the menu already warns about
       if (p.size !== size) {
         const saved = loadSave(p.size)
         const savedUnfinished = saved && hasProgress(saved) && !isSolved(saved.puzzle, saved.walls, saved.paint)
-        const differs = saved && !(saved.puzzle.seed === p.seed && (saved.puzzle.v ?? 1) === p.version)
+        const differs = saved && !(saved.puzzle.seed === p.seed && (saved.puzzle.v ?? 1) === p.version &&
+          (saved.puzzle.level ?? null) === p.level)
         if (savedUnfinished && (differs || p.state) &&
           !window.confirm(`Opening this code replaces your unfinished ${p.size} \u00d7 ${p.size} puzzle.`)) return
       }
-      setRequest({ size: p.size, seed: p.seed, state: p.state, confirmed: true })
+      setRequest({ size: p.size, seed: p.seed, level: p.level, state: p.state, confirmed: true })
     }
     setNewError('')
     setCodeInput('')
@@ -680,7 +703,10 @@ export default function App() {
   // ---------------------------------------------------------------- render
   let status = ''
   if (error) status = error
-  else if (busy) status = warm ? `Generating a ${size} × ${size} puzzle…` : 'Preparing the puzzle generator. The first one takes a few seconds.'
+  else if (busy) {
+    const what = `${genLevel ? `${levelLabel(size, genLevel)} ` : ''}${size} × ${size}`
+    status = warm ? `Generating a ${what} puzzle…` : 'Preparing the puzzle generator. The first one takes a few seconds.'
+  }
   else if (solved) status = 'Solved.'
   else if (notice) status = notice
 
@@ -761,6 +787,7 @@ export default function App() {
       <div className={`status-row${solved && !busy ? ' is-solved' : ''}`} ref={shareRef}>
         <p className="status" role="status">{puzzle ? status : ''}</p>
         <div className="status-meta">
+          {puzzle?.level && <span className="level-tag">{levelLabel(puzzle.R, puzzle.level)}</span>}
           {code && (
             <button className="code-button" onClick={toggleShare}
               aria-expanded={shareOpen} aria-label={`Puzzle code ${code}. Share this puzzle`}>
@@ -843,16 +870,20 @@ export default function App() {
             {newOpen && (
               <div className="share-panel new-panel" role="dialog" aria-label="Start a new puzzle">
                 <div className="share-block">
-                  <button className="text-button is-primary" onClick={startRandom} disabled={busy}>
-                    Random {size} × {size} puzzle
-                  </button>
+                  <p className="share-label">Random {size} × {size} puzzle</p>
+                  <div className="level-row" role="group" aria-label="Difficulty">
+                    {Object.entries(LEVELS[size] ?? {}).map(([letter, [label]]) => (
+                      <button key={letter} className={`text-button${levels[size] === letter ? ' is-primary' : ''}`}
+                        onClick={() => startRandom(letter)} disabled={busy}>{label}</button>
+                    ))}
+                  </div>
                   {unfinished && <p className="share-label">This puzzle isn’t solved yet. Starting another one replaces it.</p>}
                 </div>
                 <form className="share-block" onSubmit={openCode}>
                   <label className="share-label" htmlFor="code-input">Or play a shared code</label>
                   <div className="share-row">
                     <input id="code-input" className="share-input" value={codeInput} autoComplete="off" spellCheck={false}
-                      placeholder="2-10-3f2a91c0 or a link" onChange={e => { setCodeInput(e.target.value); setNewError('') }} />
+                      placeholder="2-10h-3f2a91c0 or a link" onChange={e => { setCodeInput(e.target.value); setNewError('') }} />
                     <button className="text-button" type="submit" disabled={!codeInput.trim()}>Open</button>
                   </div>
                 </form>

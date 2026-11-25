@@ -7,6 +7,7 @@ See PLAN.md for the design.
 """
 from __future__ import annotations
 
+import json
 import random
 from dataclasses import dataclass, field
 from typing import Callable
@@ -808,6 +809,55 @@ class Solver:
             cost += c
             used = max(used, lv)
             steps.append((lv, c))
+
+
+TIERS = ('normal', 'hard', 'expert')
+
+# Levels offered per board size: code letter -> [label, tiers it accepts]. A tier too rare at
+# a size is folded into its neighbour (7x7: hard 2.5%, expert 1.5% -> one Hard). Shares of
+# first unique puzzles per seed (2026-11-25): 7x7 96/2.5/1.5%, 10x10 81/12/7%, 15x15 20/16/64%.
+# web/vite.config.js reads this JSON; changing it changes what level codes mean (bump the version).
+LEVELS_JSON = '''{
+  "7": {"n": ["Normal", ["normal"]], "h": ["Hard", ["hard", "expert"]]},
+  "10": {"n": ["Normal", ["normal"]], "h": ["Hard", ["hard"]], "e": ["Expert", ["expert"]]},
+  "15": {"n": ["Normal", ["normal"]], "h": ["Hard", ["hard"]], "e": ["Expert", ["expert"]]}
+}'''
+LEVELS = {int(n): v for n, v in json.loads(LEVELS_JSON).items()}
+
+
+def tier(R: int, C: int, dots: list[Dot]) -> str:
+    """Difficulty tier of a unique puzzle (2026-11-25): 'normal' if basic deductions without
+    the path rule finish it (= Simon Tatham's Normal, puzzle-galaxies.com Normal), 'hard' if
+    they do with the path rule, 'expert' if it needs trials even then. No trials are run."""
+    s = Solver(R, C, dots, paths=False)
+    own, cand, queue, dirty = s._initial()
+    if s._settle(own, cand, queue, dirty, 0)[0] == 'solved':
+        return 'normal'
+    s.paths = True
+    return 'hard' if s._settle(own, cand, [], set(range(s.D)), 0)[0] == 'solved' else 'expert'
+
+
+def make_puzzle(n: int, seed: int, level: str | None = None) -> tuple[Puzzle, int]:
+    """The puzzle a share code stands for (the web worker and logtool both use this).
+    Draw from random.Random(seed) until a puzzle has exactly one solution and, when `level`
+    (a letter of LEVELS[n]) is given, its tier is one that level accepts. Returns (puzzle,
+    tries). Codes without a level (version 2 before 2026-11-25) keep their puzzles."""
+    rng = random.Random(seed)
+    accept = LEVELS[n][level][1] if level else None
+    tries = 0
+    while True:
+        tries += 1
+        pz = generate_sim(n, n, rng)
+        if accept is None:
+            if Solver(n, n, pz.dots).count_solutions(2) == 1:
+                return pz, tries
+            continue
+        # The tier first: it is cheap, and a puzzle basic deductions finish has one solution
+        # (they are sound), so only 'expert' needs the exact count. A puzzle with several
+        # solutions always comes out 'expert'. Same puzzles as checking uniqueness first.
+        t = tier(n, n, pz.dots)
+        if t in accept and (t != 'expert' or Solver(n, n, pz.dots).count_solutions(2) == 1):
+            return pz, tries
 
 
 def solve(R: int, C: int, dots: list[Dot], **kw) -> SolveResult:

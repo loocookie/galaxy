@@ -15,12 +15,11 @@ import argparse
 import base64
 import datetime as dt
 import json
-import random
 import sys
 import zlib
 from pathlib import Path
 
-from galaxy import GENERATOR_VERSION, Board, Solver, generate_sim
+from galaxy import GENERATOR_VERSION, Board, Solver, make_puzzle
 
 LOG_DIR = Path(__file__).parent / 'data' / 'logs'
 REPLAY_DIR = Path(__file__).parent / 'web' / 'replays'  # not in git; see web/replay.html
@@ -41,11 +40,8 @@ def puzzle_for(code: str):
     version, size, seed = code.split('-')
     if int(version) != GENERATOR_VERSION:
         raise SystemExit(f'log is from generator version {version}, this galaxy.py is {GENERATOR_VERSION}')
-    n, rng = int(size), random.Random(int(seed, 16))
-    while True:
-        pz = generate_sim(n, n, rng)
-        if Solver(n, n, pz.dots).count_solutions(2) == 1:
-            return pz
+    level = size[-1] if size[-1].isalpha() else None  # '15h': a difficulty level
+    return make_puzzle(int(size.rstrip('abcdefghijklmnopqrstuvwxyz')), int(seed, 16), level)[0]
 
 
 def solution_walls(R, C, owner):

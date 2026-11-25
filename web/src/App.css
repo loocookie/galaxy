@@ -371,11 +371,8 @@ kbd {
   .header .segmented { flex: 1; }
   .header .segmented button { padding: 6px 10px; flex: 1; justify-content: center; }
   .header .icon-button { width: 36px; height: 36px; }
-}
-@media (max-width: 360px) {
-  .header .segmented button { padding: 6px 8px; font-size: 0.88rem; }
-  .header-controls { gap: 6px; }
-  .actions .text-button { white-space: nowrap; padding: 10px 4px; font-size: 0.9rem; }
+  /* tools and actions each span the width too, so the New puzzle menu (which hangs from the
+     right end of its button) stays on screen */
   .toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
   .tool-group .segmented { display: flex; flex: 1; }
   .memo-toggle { padding: 10px 14px; }
@@ -383,4 +380,18 @@ kbd {
   .actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
   .text-button { padding: 10px 8px; }
   .hint { display: none; }
+}
+@media (max-width: 360px) {
+  .header .segmented button { padding: 6px 8px; font-size: 0.88rem; }
+  .header-controls { gap: 6px; }
+  .actions .text-button { white-space: nowrap; padding: 10px 4px; font-size: 0.9rem; }
+}
+
+/* ---------------------------------------------------------------- difficulty */
+.level-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.level-tag {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  letter-spacing: 0.02em;
 }

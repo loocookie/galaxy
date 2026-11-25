@@ -23,5 +23,19 @@ for (const bad of ['', 'hello', '1-10', '1-10-xyz', '1-10-123456789', '1 10 abc'
   check(parseCode(bad, opts).reason === 'format', `rejects ${JSON.stringify(bad)}`)
 }
 
+// difficulty levels
+const lv = { version: 2, sizes: [7, 10, 15], levels: { 7: { n: 1, h: 1 }, 10: { n: 1, h: 1, e: 1 }, 15: { n: 1, h: 1, e: 1 } } }
+check(formatCode(2, 15, 0xabc, 'h') === '2-15h-abc', 'format with a level')
+check(formatCode(2, 15, 0xabc) === '2-15-abc', 'format without a level')
+{
+  const p = parseCode('2-15h-abc', lv)
+  check(p.ok && p.size === 15 && p.level === 'h' && p.seed === 0xabc, 'parses a level')
+  const q = parseCode('2-15-abc', lv)
+  check(q.ok && q.level === null, 'a code without a level still opens')
+  check(parseCode('2-7e-abc', lv).reason === 'level', 'a level the size lacks')
+  check(parseCode('2-10E-ABC', lv).level === 'e', 'level letter ignores case')
+  check(parseCode('https://x/galaxy/?p=2-10n-ff&s=abc', lv).level === 'n', 'level in a link')
+}
+
 console.log(fails ? `${fails} failures` : 'share: all checks passed')
 if (fails) process.exit(1)
