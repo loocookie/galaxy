@@ -37,5 +37,21 @@ check(formatCode(2, 15, 0xabc) === '2-15-abc', 'format without a level')
   check(parseCode('https://x/galaxy/?p=2-10n-ff&s=abc', lv).level === 'n', 'level in a link')
 }
 
+// typed on a phone: Korean layout, odd dashes, spaces, no version
+{
+  const want = (text, size, level, seed) => {
+    const p = parseCode(text, lv)
+    check(p.ok && p.size === size && p.level === level && p.seed === seed, `typed ${JSON.stringify(text)} -> ${JSON.stringify(p)}`)
+  }
+  want('2-15ㅗ-3ㄹ2ㅁ91ㅊ0', 15, 'h', 0x3f2a91c0)       // h f a c in the Korean layout
+  want('2-10ㅜ-듇ㅇ', 10, 'n', 0xebed)                  // e b e d typed: ㄷ+ㅠ+ㄷ make one syllable
+  want('2－15ｈ－ＡＢＣ', 15, 'h', 0xabc)                 // full-width
+  want('2‐15h–abc', 15, 'h', 0xabc)           // hyphen and en dash
+  want(' 2 - 7h - ff ', 7, 'h', 0xff)                   // spaces
+  want('15e-abc', 15, 'e', 0xabc)                       // no version
+  check(parseCode('15e-abc', lv).version === 2, 'no version means this page’s')
+  check(parseCode('2-10-abc', lv).ok, 'plain codes still parse')
+}
+
 console.log(fails ? `${fails} failures` : 'share: all checks passed')
 if (fails) process.exit(1)

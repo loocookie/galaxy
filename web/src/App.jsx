@@ -714,17 +714,34 @@ export default function App() {
     ? formatCode(puzzle.v ?? 1, puzzle.R, puzzle.seed, puzzle.level ?? shownLevel) : ''
   const link = code ? shareLink(code) : ''
 
-  // panels close on a press anywhere outside them
+  // Panels close on a tap anywhere outside them. A tap, not a press: on a phone, putting a
+  // finger down to scroll a panel into view mustn't close it (a scroll fires no click).
   useEffect(() => {
     if (!shareOpen && !newOpen && !settingsOpen) return
-    const onDown = (e) => {
+    const onTap = (e) => {
       if (shareRef.current && !shareRef.current.contains(e.target)) setShareOpen(false)
       if (newRef.current && !newRef.current.contains(e.target)) setNewOpen(false)
       if (settingsRef.current && !settingsRef.current.contains(e.target)) setSettingsOpen(false)
     }
-    document.addEventListener('pointerdown', onDown)
-    return () => document.removeEventListener('pointerdown', onDown)
+    document.addEventListener('click', onTap)
+    return () => document.removeEventListener('click', onTap)
   }, [shareOpen, newOpen, settingsOpen])
+
+  // a panel that opens below the fold scrolls into view
+  useEffect(() => {
+    const el = (newOpen && newRef.current?.querySelector('.share-panel')) ||
+      (shareOpen && shareRef.current?.querySelector('.share-panel'))
+    if (!el) return // none open
+    // Scroll just enough for its bottom (and a little room) to come on screen, once its short
+    // scale-in is over: until then the page isn't as tall yet and the scroll would stop short.
+    const go = () => {
+      const over = el.getBoundingClientRect().bottom + 16 - window.innerHeight
+      if (over > 0) window.scrollBy({ top: over, behavior: 'smooth' })
+    }
+    el.addEventListener('animationend', go, { once: true })
+    const t = setTimeout(go, 250) // no animation (reduced motion): no animationend
+    return () => { clearTimeout(t); el.removeEventListener('animationend', go) }
+  }, [newOpen, shareOpen])
 
   // "Include my progress": the link carries the board and time as they were when asked for
   const takeSnap = () => setSnap(progress ? { ...progress, elapsed } : null)
@@ -982,6 +999,7 @@ export default function App() {
                   <label className="share-label" htmlFor="code-input">Or play a shared code</label>
                   <div className="share-row">
                     <input id="code-input" className="share-input" value={codeInput} autoComplete="off" spellCheck={false}
+                      autoCapitalize="none" autoCorrect="off"
                       placeholder="2-10h-3f2a91c0 or a link" onChange={e => { setCodeInput(e.target.value); setNewError('') }} />
                     <button className="text-button" type="submit" disabled={!codeInput.trim()}>Open</button>
                   </div>

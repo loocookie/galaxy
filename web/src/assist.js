@@ -132,25 +132,39 @@ export function mirrorFrame(R, C, dots, walls, colorAt, blocked) {
 
 /**
  * Auto candidates: for each cell that isn't colored yet, the dots it could still belong to
- * going by the player's marks: its mirror about the dot is on the board, and both it and the
- * mirror can reach the dot's core without crossing a wall or a cell of another color.
+ * going by the player's marks. A dot's region is symmetric, so it grows in mirror pairs: from
+ * the core, a step to a cell counts only if its mirror is on the board, neither is another
+ * color, and no wall stands in the way on either side (the step and its mirror image). A cell
+ * is a candidate for the dots that reach it so. (Paths through cells whose mirror is off the
+ * board or taken were counted before 2026-11-27; a region can't run through those.)
  * `display` is the color shown per cell (-1 = none). Returns a list of dot indices per cell.
  */
 export function autoCandidates(R, C, dots, walls, display) {
   const N = R * C
+  const ok = (y, k) => display[y] < 0 || display[y] === k
+  // the wall between neighbouring cells a and b (true at the frame never happens: both on board)
+  const wallBetween = (a, b) => {
+    if (a > b) [a, b] = [b, a]
+    return b === a + 1 ? walls.v[Math.floor(a / C) * (C - 1) + a % C] : walls.h[a]
+  }
   const reach = dots.map((d, k) => {
     const seen = new Uint8Array(N)
-    const st = core(R, C, d).filter(i => display[i] < 0 || display[i] === k)
+    const st = core(R, C, d).filter(i => ok(i, k))
     for (const i of st) seen[i] = 1
     while (st.length) {
       const x = st.pop(), r = Math.floor(x / C), c = x % C
-      const step = (y, wall) => {
-        if (!wall && !seen[y] && (display[y] < 0 || display[y] === k)) { seen[y] = 1; st.push(y) }
+      const mx = mirror(R, C, x, d)
+      const step = (y) => {
+        if (seen[y] || !ok(y, k)) return
+        const my = mirror(R, C, y, d)
+        if (my < 0 || !ok(my, k) || wallBetween(x, y) || wallBetween(mx, my)) return
+        seen[y] = seen[my] = 1
+        st.push(y, my)
       }
-      if (c + 1 < C) step(x + 1, walls.v[r * (C - 1) + c])
-      if (c > 0) step(x - 1, walls.v[r * (C - 1) + c - 1])
-      if (r + 1 < R) step(x + C, walls.h[x])
-      if (r > 0) step(x - C, walls.h[x - C])
+      if (c + 1 < C) step(x + 1)
+      if (c > 0) step(x - 1)
+      if (r + 1 < R) step(x + C)
+      if (r > 0) step(x - C)
     }
     return seen
   })
@@ -160,7 +174,7 @@ export function autoCandidates(R, C, dots, walls, display) {
     const list = []
     dots.forEach((d, k) => {
       const m = mirror(R, C, i, d)
-      if (m >= 0 && reach[k][i] && reach[k][m]) list.push(k)
+      if (m >= 0 && reach[k][i]) list.push(k)
     })
     out.push(list)
   }

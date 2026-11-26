@@ -5,6 +5,33 @@
 
 export const MAX_SEED = 2 ** 31 // seeds are drawn from [0, 2^31)
 
+// Typed codes come through phone keyboards: a Korean layout turns letters into jamo (h -> ㅗ,
+// and b = ㅠ can join a syllable: e b -> 듀), some keyboards give full-width or other dashes.
+// Map them back to what the same keys type in the Latin layout (두벌식).
+const JAMO = {
+  ㄱ: 'r', ㄲ: 'R', ㄳ: 'rt', ㄴ: 's', ㄵ: 'sw', ㄶ: 'sg', ㄷ: 'e', ㄸ: 'E', ㄹ: 'f', ㄺ: 'fr', ㄻ: 'fa',
+  ㄼ: 'fq', ㄽ: 'ft', ㄾ: 'fx', ㄿ: 'fv', ㅀ: 'fg', ㅁ: 'a', ㅂ: 'q', ㅃ: 'Q', ㅄ: 'qt', ㅅ: 't', ㅆ: 'T',
+  ㅇ: 'd', ㅈ: 'w', ㅉ: 'W', ㅊ: 'c', ㅋ: 'z', ㅌ: 'x', ㅍ: 'v', ㅎ: 'g',
+  ㅏ: 'k', ㅐ: 'o', ㅑ: 'i', ㅒ: 'O', ㅓ: 'j', ㅔ: 'p', ㅕ: 'u', ㅖ: 'P', ㅗ: 'h', ㅘ: 'hk', ㅙ: 'ho',
+  ㅚ: 'hl', ㅛ: 'y', ㅜ: 'n', ㅝ: 'nj', ㅞ: 'np', ㅟ: 'nl', ㅠ: 'b', ㅡ: 'm', ㅢ: 'ml', ㅣ: 'l',
+}
+const LEAD = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ'
+const VOWEL = 'ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ'
+const TAIL = ['', ...'ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ']
+
+export function latinKeys(text) {
+  // jamo first: NFKC would turn compatibility jamo (ㅗ) into conjoining ones (ᅩ)
+  let out = ''
+  for (const ch of String(text)) {
+    const code = ch.charCodeAt(0) - 0xac00
+    if (code >= 0 && code < 11172) { // a composed syllable: lead + vowel (+ tail)
+      const t = code % 28, v = Math.floor(code / 28) % 21, l = Math.floor(code / 588)
+      out += JAMO[LEAD[l]] + JAMO[VOWEL[v]] + (t ? JAMO[TAIL[t]] : '')
+    } else out += JAMO[ch] ?? ch
+  }
+  return out.normalize('NFKC').replace(/[‐-―−ー]/g, '-') // hyphen-like marks
+}
+
 export function formatCode(version, size, seed, level = null) {
   return `${version}-${size}${level ?? ''}-${seed.toString(16)}`
 }
@@ -16,15 +43,19 @@ export function formatCode(version, size, seed, level = null) {
  * state is the raw progress text or null. `levels`: { size: { letter: ... } } when known.
  */
 export function parseCode(input, { version, sizes, levels = null }) {
-  let text = String(input ?? '').trim()
+  let text = latinKeys(String(input ?? '')).trim()
   const fromState = text.match(/[?&]s=([A-Za-z0-9_-]+)/)
   const state = fromState ? fromState[1] : null
   const fromLink = text.match(/[?&]p=([^&#\s]+)/)
   if (fromLink) text = decodeURIComponent(fromLink[1])
-  const m = text.toLowerCase().match(/^(\d{1,3})-(\d{1,2})([a-z]?)-([0-9a-f]{1,8})$/)
+  text = text.toLowerCase().replace(/\s+/g, '')
+  // "2-15h-3f2a91c0", or without the version ("15h-3f2a91c0": this page's version)
+  const m = text.match(/^(?:(\d{1,3})-)?(\d{1,2})([a-z]?)-([0-9a-f]{1,8})$/)
   if (!m) return { ok: false, reason: 'format' }
-  const v = Number(m[1]), size = Number(m[2]), level = m[3] || null, seed = parseInt(m[4], 16)
+  const v = m[1] === undefined ? version : Number(m[1])
+  const size = Number(m[2]), level = m[3] || null, seed = parseInt(m[4], 16)
   if (seed >= MAX_SEED) return { ok: false, reason: 'format' }
+  if (m[1] === undefined && !sizes.includes(size)) return { ok: false, reason: 'format' } // "1-10" is no code
   if (!sizes.includes(size)) return { ok: false, reason: 'size' }
   if (v !== version) return { ok: false, reason: 'version', version: v }
   if (level && levels && !levels[size]?.[level]) return { ok: false, reason: 'level' }
